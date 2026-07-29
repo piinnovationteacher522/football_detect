@@ -5,68 +5,67 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>足球偵測 × micro:bit</title>
-<!-- 你自己訓練嘅 Edge Impulse FOMO 模型（要同呢個 HTML 放喺同一資料夾） -->
+
 <script src="edge-impulse-standalone.js"></script>
 <script>
-// 依照 Edge Impulse 官方 run-impulse.js（瀏覽器版）
-let classifierInitialized=false;
-if(typeof Module!=='undefined'){ Module.onRuntimeInitialized=function(){ classifierInitialized=true; }; }
-class EdgeImpulseClassifier{
-  init(){
-    if(typeof Module==='undefined') return Promise.reject(new Error('搵唔到 edge-impulse-standalone.js'));
-    if(classifierInitialized===true){
-      const r=Module.init();
-      if(typeof r==='number'&&r!==0) return Promise.reject(new Error('init 失敗 code '+r));
+// Edge Impulse 分類器（依照官方 run-impulse.js 瀏覽器版）
+let classifierInitialized = false;
+if (typeof Module !== 'undefined') {
+  Module.onRuntimeInitialized = function () { classifierInitialized = true; };
+}
+class EdgeImpulseClassifier {
+  init() {
+    if (typeof Module === 'undefined') return Promise.reject(new Error('找不到 edge-impulse-standalone.js'));
+    if (classifierInitialized === true) {
+      const r = Module.init();
+      if (typeof r === 'number' && r !== 0) return Promise.reject(new Error('init 失敗，代碼 ' + r));
       return Promise.resolve();
     }
-    return new Promise((resolve,reject)=>{
-      Module.onRuntimeInitialized=()=>{
-        classifierInitialized=true;
-        const r=Module.init();
-        if(typeof r==='number'&&r!==0) return reject(new Error('init 失敗 code '+r));
+    return new Promise((resolve, reject) => {
+      Module.onRuntimeInitialized = () => {
+        classifierInitialized = true;
+        const r = Module.init();
+        if (typeof r === 'number' && r !== 0) return reject(new Error('init 失敗，代碼 ' + r));
         resolve();
       };
     });
   }
-  getProjectInfo(){ return this._obj(Module.get_project(),Module.emcc_classification_project_t.prototype); }
-  getProperties(){ return this._obj(Module.get_properties(),Module.emcc_classification_properties_t.prototype); }
-  setThreshold(o){ const r=Module.set_threshold(o); if(!r.success) throw new Error(r.error); }
-  classify(rawData){
-    const h=this._heap(rawData);
-    const ret=Module.run_classifier(h.buffer.byteOffset,rawData.length,false);
+  getProjectInfo() { return this._obj(Module.get_project(), Module.emcc_classification_project_t.prototype); }
+  getProperties() { return this._obj(Module.get_properties(), Module.emcc_classification_properties_t.prototype); }
+  setThreshold(o) { const r = Module.set_threshold(o); if (!r.success) throw new Error(r.error); }
+  classify(rawData) {
+    const h = this._heap(rawData);
+    const ret = Module.run_classifier(h.buffer.byteOffset, rawData.length, false);
     Module._free(h.ptr);
-    if(ret.result!==0){ ret.delete(); throw new Error('分類失敗 err='+ret.result); }
-    const out=[];
-    for(let i=0;i<ret.size();i++){
-      const c=ret.get(i);
-      out.push({label:c.label,value:c.value,x:c.x,y:c.y,width:c.width,height:c.height});
+    if (ret.result !== 0) { ret.delete(); throw new Error('分類失敗，代碼 ' + ret.result); }
+    const out = [];
+    for (let i = 0; i < ret.size(); i++) {
+      const c = ret.get(i);
+      out.push({ label: c.label, value: c.value, x: c.x, y: c.y, width: c.width, height: c.height });
       c.delete();
     }
     ret.delete();
     return out;
   }
-  _heap(data){
-    const ta=data instanceof Float32Array?data:new Float32Array(data);
-    const n=ta.length*ta.BYTES_PER_ELEMENT;
-    const ptr=Module._malloc(n);
-    const hb=new Uint8Array(Module.HEAPU8.buffer,ptr,n);
-    hb.set(new Uint8Array(ta.buffer,ta.byteOffset,n));
-    return {ptr,buffer:hb};
+  _heap(data) {
+    const ta = data instanceof Float32Array ? data : new Float32Array(data);
+    const n = ta.length * ta.BYTES_PER_ELEMENT;
+    const ptr = Module._malloc(n);
+    const hb = new Uint8Array(Module.HEAPU8.buffer, ptr, n);
+    hb.set(new Uint8Array(ta.buffer, ta.byteOffset, n));
+    return { ptr, buffer: hb };
   }
-  _obj(o,proto){
-    const n={};
-    for(const k of Object.getOwnPropertyNames(proto)){
-      const d=Object.getOwnPropertyDescriptor(proto,k);
-      if(d&&typeof d.get==='function'){ try{ n[k]=o[k]; }catch(e){} }
+  _obj(o, proto) {
+    const n = {};
+    for (const k of Object.getOwnPropertyNames(proto)) {
+      const d = Object.getOwnPropertyDescriptor(proto, k);
+      if (d && typeof d.get === 'function') { try { n[k] = o[k]; } catch (e) {} }
     }
     return n;
   }
 }
 </script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.6/dist/knn-classifier.min.js"></script>
+
 <style>
   :root{
     --pitch:#1f6b3a; --pitch-dark:#144927; --line:#eef3e9;
@@ -78,8 +77,7 @@ class EdgeImpulseClassifier{
     font-family:-apple-system,"Segoe UI","Noto Sans TC","PingFang TC",sans-serif;
     background:repeating-linear-gradient(90deg,var(--pitch) 0 120px,var(--pitch-dark) 120px 240px);
     min-height:100vh; color:var(--ink);
-    padding:env(safe-area-inset-top) 16px calc(48px + env(safe-area-inset-bottom));
-    padding-top:24px;
+    padding:24px 16px calc(48px + env(safe-area-inset-bottom));
   }
   .wrap{max-width:1000px;margin:0 auto;}
   header{color:var(--line);text-align:center;margin-bottom:18px;}
@@ -92,11 +90,33 @@ class EdgeImpulseClassifier{
   .card{background:var(--card);border-radius:14px;padding:16px;box-shadow:0 6px 24px rgba(0,0,0,.25);}
   .card h2{font-size:1rem;margin-bottom:10px;border-left:5px solid var(--accent);padding-left:8px;}
 
+  /* ===== 影片區（含全螢幕） ===== */
   .video-box{position:relative;width:100%;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:4/3;}
   video,canvas.overlay{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
   canvas.overlay{pointer-events:none;}
+
+  .video-box.fs{
+    position:fixed; inset:0; width:100vw; height:100vh;
+    z-index:9999; border-radius:0; aspect-ratio:auto;
+  }
+  .video-box.fs video, .video-box.fs canvas.overlay{ object-fit:contain; }
+  .video-box.fs .fs-hud{ display:flex; }
+  .fs-hud{
+    display:none; position:absolute; left:0; right:0;
+    bottom:calc(12px + env(safe-area-inset-bottom));
+    justify-content:center; flex-wrap:wrap; gap:8px; padding:0 12px; z-index:6;
+  }
+  .fs-hud .pill{background:rgba(255,255,255,.92);}
+  .fs-close{
+    position:absolute; z-index:7; display:none;
+    top:calc(12px + env(safe-area-inset-top)); left:12px;
+    background:rgba(0,0,0,.55); color:#fff; border-radius:10px;
+    padding:10px 14px; font-weight:600; cursor:pointer; font-size:.9rem;
+  }
+  .video-box.fs .fs-close{display:block;}
+
   .fps{
-    position:absolute;top:8px;right:8px;z-index:3;
+    position:absolute;top:8px;right:8px;z-index:5;
     background:rgba(0,0,0,.55);color:#bfe6c8;font-family:Consolas,monospace;
     font-size:.72rem;padding:4px 8px;border-radius:6px;line-height:1.5;
   }
@@ -106,7 +126,7 @@ class EdgeImpulseClassifier{
   .statusbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
   .pill{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:#eef1ee;font-size:.86rem;font-weight:600;}
   .dot{width:10px;height:10px;border-radius:50%;background:#999;flex:none;}
-  .pill.on .dot{background:var(--ok);} .pill.off .dot{background:var(--off);} .pill.mid .dot{background:#e0a80f;}
+  .pill.on .dot{background:var(--ok);} .pill.off .dot{background:var(--off);}
 
   button{
     font:inherit;font-weight:600;border:none;border-radius:10px;
@@ -117,105 +137,107 @@ class EdgeImpulseClassifier{
   button:hover{filter:brightness(1.1);} button:active{transform:scale(.97);}
   button:disabled{background:#9aa79e;cursor:not-allowed;}
   button.secondary{background:#39424a;} button.warn{background:var(--off);} button.gold{background:var(--accent);color:#3a2c00;}
-  button.big{width:100%;font-size:1.05rem;padding:16px;}
   .btnrow{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
   .btnrow > button{flex:1 1 auto;}
 
-  select{font:inherit;padding:8px;border-radius:8px;border:1px solid #ccc;min-height:40px;}
-  .ctrlgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:12px;
+  select{font:inherit;padding:8px;border-radius:8px;border:1px solid #ccc;min-height:40px;width:100%;}
+  .ctrlgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:10px;margin-top:12px;
             background:#f4f6f3;padding:12px;border-radius:10px;}
   .ctrlgrid label{font-size:.82rem;font-weight:600;color:#333;display:flex;flex-direction:column;gap:5px;}
   .ctrlgrid input[type=range]{width:100%;}
 
   .hint{font-size:.84rem;color:#555;line-height:1.65;}
   .learn-count{font-size:.85rem;color:#444;margin-top:10px;line-height:1.6;}
-  .learn-result{margin-top:8px;padding:8px 10px;border-radius:8px;background:#f4f6f3;font-size:.88rem;min-height:38px;}
-  .log{margin-top:10px;background:#10160f;color:#bfe6c8;border-radius:8px;padding:10px;height:110px;overflow-y:auto;
+  .log{margin-top:10px;background:#10160f;color:#bfe6c8;border-radius:8px;padding:10px;height:130px;overflow-y:auto;
        font-family:Consolas,monospace;font-size:.76rem;line-height:1.5;white-space:pre-wrap;-webkit-overflow-scrolling:touch;}
   .warnbox{background:#fff4e5;border-left:5px solid var(--accent);padding:10px 12px;border-radius:8px;font-size:.85rem;line-height:1.65;margin-top:10px;}
   details{margin-top:16px;}
   details summary{cursor:pointer;font-weight:700;color:var(--line);padding:6px 0;}
   details .card{margin-top:10px;font-size:.88rem;line-height:1.75;}
   code{background:#eef1ee;padding:1px 5px;border-radius:4px;font-size:.85em;}
-  ol{padding-left:1.3em;} ol li{margin:3px 0;}
+  ol{padding-left:1.3em;} ol li{margin:4px 0;}
+  table{width:100%;border-collapse:collapse;margin:8px 0;font-size:.85rem;}
+  th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;}
+  th{background:#f4f6f3;}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
     <h1>⚽ 足球偵測 × micro:bit 藍牙</h1>
-    <p>高速追蹤 · XY 座標定位 · 拍照教 AI 認你隻波</p>
+    <p>自訓練 FOMO 模型 · 即時追蹤 · XY 座標定位</p>
   </header>
 
   <div class="grid">
     <div class="card">
       <h2>鏡頭畫面</h2>
-      <div class="video-box">
+      <div class="video-box" id="videoBox">
         <video id="video" autoplay muted playsinline webkit-playsinline></video>
         <canvas id="overlay" class="overlay"></canvas>
         <div class="fps" id="fps">FPS —</div>
         <div class="capture-flash" id="flash"></div>
+        <div class="fs-close" id="fsClose">✕ 離開全螢幕</div>
+        <div class="fs-hud" id="fsHud"></div>
       </div>
-      <div class="statusbar">
+
+      <div class="statusbar" id="statusbar">
         <span class="pill" id="pillModel"><span class="dot"></span>模型：載入中…</span>
-        <span class="pill off" id="pillBall"><span class="dot"></span>足球：未見到</span>
+        <span class="pill off" id="pillBall"><span class="dot"></span>足球：未偵測到</span>
         <span class="pill off" id="pillPos"><span class="dot"></span>座標：—</span>
         <span class="pill off" id="pillBt"><span class="dot"></span>micro:bit：未連接</span>
       </div>
+
       <div class="btnrow">
         <button id="btnCam">開啟鏡頭</button>
+        <button id="btnFs" class="secondary" disabled>⛶ 全螢幕</button>
         <button id="btnSwitch" class="secondary" disabled>切換鏡頭</button>
-        <button id="btnAxis" class="secondary">隱藏座標尺</button>
-        <select id="selPerf" title="效能模式">
-          <option value="fast">⚡ 極速</option>
-          <option value="balanced" selected>⚖️ 平衡</option>
-          <option value="quality">🔍 高清</option>
-        </select>
         <button id="btnBt" class="gold" disabled>連接 micro:bit</button>
       </div>
       <div id="btWarn"></div>
+
       <div class="ctrlgrid">
-        <label>偵測引擎
-          <select id="selEngine">
-            <option value="fomo">🎯 我嘅 FOMO 模型</option>
-            <option value="coco">📦 內置 COCO-SSD</option>
-          </select>
-        </label>
         <label>影像對齊
           <select id="selFit">
             <option value="squash">拉伸 Squash</option>
             <option value="crop">置中裁切 Fit shortest axis</option>
           </select>
         </label>
+        <label>鏡頭解像度
+          <select id="selRes">
+            <option value="low">640 × 480（最省）</option>
+            <option value="mid" selected>960 × 720（平衡）</option>
+            <option value="high">1280 × 960（最清晰）</option>
+          </select>
+        </label>
         <label>信心門檻 <b id="thVal">0.50</b>
           <input type="range" id="rngTh" min="0.1" max="0.95" step="0.05" value="0.5">
         </label>
-        <label>框大小 <b id="bsVal">18%</b>
+        <label>偵測框大小
+          <select id="selSize">
+            <option value="auto" selected>自動（跟隨物件大小）</option>
+            <option value="fixed">固定大小</option>
+          </select>
+        </label>
+        <label id="lblExpand">框膨脹倍數 <b id="exVal">1.6×</b>
+          <input type="range" id="rngEx" min="1.0" max="3.5" step="0.1" value="1.6">
+        </label>
+        <label id="lblFixed" style="display:none">固定框大小 <b id="bsVal">18%</b>
           <input type="range" id="rngBs" min="6" max="45" step="1" value="18">
+        </label>
+        <label>座標尺
+          <select id="selAxis">
+            <option value="on" selected>顯示</option>
+            <option value="off">隱藏</option>
+          </select>
         </label>
       </div>
     </div>
 
     <div class="card">
-      <h2>📸 拍照教 AI 認你隻波</h2>
+      <h2>🎞 收集訓練相片</h2>
       <p class="hint">
-        將足球<b>攞近鏡頭、差唔多填滿成個畫面</b>，撳「拍攝足球」。
-        會連拍 12 張唔同角度嘅樣本，轉下隻波、換下背景再拍多幾次會更準。
-      </p>
-      <div class="btnrow">
-        <button id="btnShotBall" class="big gold" disabled>📸 拍攝足球（近鏡）</button>
-      </div>
-      <div class="btnrow">
-        <button id="btnShotNone" class="secondary" disabled>📸 拍攝背景（無波）</button>
-        <button id="btnLearnReset" class="warn" disabled>清除</button>
-      </div>
-      <div class="learn-count" id="learnCount">樣本：足球 0 張／背景 0 張</div>
-      <div class="learn-result" id="learnResult">未開始學習。兩類各拍 2～3 次就用得。</div>
-
-      <h2 style="margin-top:16px">🎞 收集訓練相（俾 Edge Impulse 用）</h2>
-      <p class="hint">
-        自動每 0.8 秒影一張。喺實際場地行一圈，唔同角度、距離、光線影 200～300 張，
-        然後下載去 Edge Impulse 標註。
+        自動每 0.8 秒拍攝一張。在實際場地走一圈，以不同角度、距離、光線拍攝 200 至 300 張，
+        然後下載並上傳至 Edge Impulse 進行標註，用以改善模型。
       </p>
       <div class="btnrow">
         <button id="btnRec" disabled>▶ 開始收集</button>
@@ -229,144 +251,143 @@ class EdgeImpulseClassifier{
     </div>
   </div>
 
-  <details>
-    <summary>📋 使用說明 · iPad 設定 · micro:bit 程式</summary>
+  <details open>
+    <summary>📋 micro:bit 設定說明</summary>
     <div class="card">
-      <b>⚠️ 檔案一定要齊，放喺同一個資料夾：</b>
+      <b>一、在 MakeCode 加入藍牙功能</b>
       <ol>
-        <li><code>football-microbit.html</code></li>
-        <li><code>edge-impulse-standalone.js</code></li>
-        <li><code>edge-impulse-standalone.wasm</code>（約 8 MB，第一次載入要等幾秒）</li>
-        <li><code>server.py</code></li>
+        <li>開啟 <code>makecode.microbit.org</code>，建立新專案。</li>
+        <li>左邊選單捲到最底，選擇「擴展 Extensions」。</li>
+        <li>搜尋並加入 <code>bluetooth</code>。</li>
+        <li>加入後，「無線電 Radio」類別會被移除，這是正常的，兩者不能同時使用。</li>
       </ol>
 
-      <b>方法一：GitHub Pages（推薦，有 https，iPad 都用得）</b>
+      <b>二、開啟藍牙服務</b>
       <ol>
-        <li>將成個資料夾上載去一個 <b>public</b> repo。</li>
-        <li>Settings → Pages → Source 揀 <code>main</code> / <code>(root)</code> → Save。</li>
-        <li>等 1～2 分鐘，開 <code>https://你嘅帳戶.github.io/repo名稱/</code>。</li>
-        <li>GitHub 會自動用啱 <code>.wasm</code> 嘅 MIME type，唔使 server.py。</li>
+        <li>在「當開機時 on start」放入 <b>bluetooth uart service</b>。</li>
+        <li>按右上角齒輪 ⚙ → <b>Project Settings</b>。</li>
+        <li>將 <b>No Pairing Required: Anyone can connect via Bluetooth</b> 設為開啟。</li>
+        <li>這一步是必須的，否則瀏覽器無法連接。</li>
       </ol>
 
-      <b>方法二：本機測試</b>
+      <b>三、接收並解析座標</b>
+      <p>本網頁傳送的訊號格式如下：</p>
+      <table>
+        <tr><th>情況</th><th>傳送內容</th><th>意思</th></tr>
+        <tr><td>偵測到足球</td><td><code>BALL,72,38</code></td><td>X = 72、Y = 38</td></tr>
+        <tr><td>沒有偵測到</td><td><code>NONE</code></td><td>畫面中沒有足球</td></tr>
+      </table>
+      <p>
+        X 由畫面最左的 <b>0</b> 至最右的 <b>100</b>；Y 由最頂的 <b>0</b> 至最底的 <b>100</b>。
+        畫面正中央即為 <code>50, 50</code>。座標改變時立即傳送，另外每 2 秒重複傳送一次現況。
+      </p>
       <ol>
-        <li>喺資料夾開終端機，行 <code>python3 server.py</code>
-            —— <b>必須</b>用呢個，唔可以用普通 <code>python -m http.server</code>，因為 <code>.wasm</code> 檔要正確嘅 MIME type 先載入到。</li>
-        <li>開 <code>http://localhost:8082/</code>。</li>
+        <li>使用「當 UART 收到資料（以 新行 分隔）」積木讀取字串。</li>
+        <li>用「文字 Text」類別的 <code>split</code> 積木，以 <code>,</code> 分割字串。</li>
+        <li>第 0 項是 <code>BALL</code>，第 1 項是 X，第 2 項是 Y。</li>
+        <li>用 <code>parse to number</code> 將 X、Y 轉換為數字。</li>
       </ol>
 
-      <b>我嘅 FOMO 模型（football-tracker）：</b>
-      <ol>
-        <li>輸入 160×160 灰階，標籤 <code>football</code>，屬 constrained object detection（FOMO）。</li>
-        <li><b>影像對齊</b>要同你喺 Edge Impulse 訓練時嘅 Resize mode 一致：訓練揀咗 Squash 就揀「拉伸」，揀咗 Fit shortest axis 就揀「置中裁切」。揀錯會準確度大跌。</li>
-        <li><b>信心門檻</b>調低啲＝易認到但假警報多；調高啲＝準但易漏。由 0.5 開始試。</li>
-        <li><b>框大小</b>：FOMO 只輸出中心點、冇真實尺寸，所以個框係固定大細，用滑桿調到啱你隻波就得。</li>
-        <li>認得唔好嘅話可以切返「內置 COCO-SSD」對比。</li>
-      </ol>
+      <b>四、判斷方向</b>
+      <table>
+        <tr><th>X 數值</th><th>足球位置</th></tr>
+        <tr><td>小於 40</td><td>左邊</td></tr>
+        <tr><td>40 至 60</td><td>中間</td></tr>
+        <tr><td>大於 60</td><td>右邊</td></tr>
+      </table>
+      <p>
+        若要控制馬達追蹤足球，可直接使用 <code>X − 50</code> 作為誤差值：
+        負數代表足球偏左，正數代表偏右，數值愈大代表偏離愈遠。
+        將此誤差值乘以一個係數後輸入馬達速度，即可實現比例控制，轉動會比分段判斷平順得多。
+      </p>
 
-      <b>iPad：</b>
+      <b>五、連接注意事項</b>
       <ol>
-        <li><b>鏡頭同 AI 偵測</b>：Safari 直接開就用得（要 https 或 localhost）。</li>
-        <li><b>藍牙</b>：iPadOS 嘅 Safari / Chrome <b>唔支援 Web Bluetooth</b>。要裝 App Store 嘅 <b>Bluefy</b> 瀏覽器（免費版夠用），用佢開呢個網頁，藍牙就連得到 micro:bit。</li>
-        <li>網頁要放喺可以上網嘅位置（例如 GitHub Pages、Netlify），或者電腦開 server 後用同一個 Wi-Fi 嘅 IP（如 <code>http://192.168.1.5:8000</code>）——注意非 https 嘅 IP 位址，Safari 唔會俾用鏡頭，所以建議整個 https 網址。</li>
-        <li>iPad 揀「後鏡」影波最方便，撳「切換鏡頭」轉前後鏡。</li>
+        <li>電腦請使用 <b>Chrome</b> 或 <b>Edge</b>。</li>
+        <li>iPad 及 iPhone 的 Safari 與 Chrome 均不支援 Web Bluetooth，需要在 App Store 安裝 <b>Bluefy</b> 瀏覽器。</li>
+        <li>網頁必須以 <code>https://</code> 或 <code>localhost</code> 開啟，藍牙與鏡頭才可使用。</li>
+        <li>micro:bit 需自行供電（電池盒或 USB），並保持在數米範圍內。</li>
+        <li>一部 micro:bit 同一時間只能連接一個裝置。</li>
       </ol>
-
-      <b>micro:bit 準備（MakeCode）：</b>
-      <ol>
-        <li>Extensions 加入 <code>bluetooth</code>。</li>
-        <li>「當開機時」放入 <b>bluetooth uart service</b>。</li>
-        <li>⚙ Project Settings → 揀 <b>No Pairing Required</b>。</li>
-        <li>用「當 UART 收到資料（以 新行 分隔）」讀字串。</li>
-      </ol>
-
-      <b>訊號格式：</b>見到波 → <code>BALL,x,y</code>（例 <code>BALL,72,38</code>）。X、Y 都係 <b>0～100 嘅百分比座標</b>：X 由左邊 0 至右邊 100，Y 由頂 0 至底 100，畫面正中係 50,50。見唔到波 → <code>NONE</code>。座標一變即傳，另每 2 秒重覆現況。<br>
-      <b>MakeCode 拆座標：</b>用 Text 類別嘅 <code>split</code> 以 <code>,</code> 分割，第 1 項係 X、第 2 項係 Y，再 <code>parse to number</code>。<br>
-      <b>判斷方向：</b>X &lt; 40 = 左，40～60 = 中，X &gt; 60 = 右。想控制摩打追波，可以直接用 <code>X - 50</code> 做誤差值（負數即係波喺左邊，正數即係右邊），數值越大代表偏得越遠，好啱用嚟做比例控制。
     </div>
   </details>
 </div>
 
 <script>
+// ===== DOM =====
 const video=document.getElementById('video');
+const videoBox=document.getElementById('videoBox');
 const overlay=document.getElementById('overlay');
 const ctx=overlay.getContext('2d');
 const logEl=document.getElementById('log');
 const fpsEl=document.getElementById('fps');
 const flashEl=document.getElementById('flash');
+const statusbar=document.getElementById('statusbar');
+const fsHud=document.getElementById('fsHud');
+const fsClose=document.getElementById('fsClose');
+
 const pillModel=document.getElementById('pillModel');
 const pillBall=document.getElementById('pillBall');
 const pillPos=document.getElementById('pillPos');
 const pillBt=document.getElementById('pillBt');
+
 const btnCam=document.getElementById('btnCam');
+const btnFs=document.getElementById('btnFs');
 const btnSwitch=document.getElementById('btnSwitch');
-const btnAxis=document.getElementById('btnAxis');
-const selPerf=document.getElementById('selPerf');
-const selEngine=document.getElementById('selEngine');
+const btnBt=document.getElementById('btnBt');
+const btWarn=document.getElementById('btWarn');
+
 const selFit=document.getElementById('selFit');
+const selRes=document.getElementById('selRes');
+const selSize=document.getElementById('selSize');
+const selAxis=document.getElementById('selAxis');
 const rngTh=document.getElementById('rngTh');
+const rngEx=document.getElementById('rngEx');
 const rngBs=document.getElementById('rngBs');
 const thVal=document.getElementById('thVal');
+const exVal=document.getElementById('exVal');
 const bsVal=document.getElementById('bsVal');
+const lblExpand=document.getElementById('lblExpand');
+const lblFixed=document.getElementById('lblFixed');
+
 const btnRec=document.getElementById('btnRec');
 const btnDl=document.getElementById('btnDl');
 const btnRecClear=document.getElementById('btnRecClear');
 const recCount=document.getElementById('recCount');
-const btnBt=document.getElementById('btnBt');
-const btnShotBall=document.getElementById('btnShotBall');
-const btnShotNone=document.getElementById('btnShotNone');
-const btnLearnReset=document.getElementById('btnLearnReset');
-const learnCount=document.getElementById('learnCount');
-const learnResult=document.getElementById('learnResult');
-const btWarn=document.getElementById('btWarn');
 
-const COORD_MAX=100;             // 座標範圍：X、Y 各 0～100（畫面百分比）
-const LEFT_EDGE=40, RIGHT_EDGE=60; // 左／中／右判斷界線
-const PRESETS={
-  fast:     {infW:256,infH:192,roi:160,full:9, camW:640, camH:480, name:'極速'},
-  balanced: {infW:320,infH:240,roi:224,full:6, camW:960, camH:720, name:'平衡'},
-  quality:  {infW:416,infH:312,roi:288,full:4, camW:1280,camH:960, name:'高清'}
-};
-let P=PRESETS.balanced;
-let INF_W=P.infW, INF_H=P.infH, ROI_SIZE=P.roi, FULL_EVERY=P.full;
-let autoTuned=false, lowFpsSince=0;
-const TRACK_HOLD=1100;           // 【追蹤框】短暫遮擋／認唔到時，框仍然跟住個波
-const ANALYZE_MS=100;            // 【座標分析】每 100ms 分析一次格仔位置
-const SMOOTH=0.45;               // 畫框平滑度
+// ===== 設定 =====
+const COORD_MAX=100;
+const LEFT_EDGE=40, RIGHT_EDGE=60;
+const TRACK_HOLD=1100;      // 追蹤框在短暫遮擋時仍然保持
+const ANALYZE_MS=100;       // 座標分析間隔
+const SMOOTH_POS=0.45;      // 位置平滑度
+const SMOOTH_SIZE=0.20;     // 尺寸平滑度（較慢，避免框忽大忽小）
 
-const infCanvas=document.createElement('canvas');
-infCanvas.width=INF_W; infCanvas.height=INF_H;
-const infCtx=infCanvas.getContext('2d',{willReadFrequently:true});
-const roiCanvas=document.createElement('canvas');
-roiCanvas.width=ROI_SIZE; roiCanvas.height=ROI_SIZE;
-const roiCtx=roiCanvas.getContext('2d',{willReadFrequently:true});
+const RESOLUTIONS={ low:{w:640,h:480,name:'640×480'}, mid:{w:960,h:720,name:'960×720'}, high:{w:1280,h:960,name:'1280×960'} };
+let RES=RESOLUTIONS.mid;
 
-let cocoModel=null, mobilenetModel=null, knn=null;
-let running=false, stream=null, facing='environment';
-let track=null;          // {x,y,w,h,score} 最新偵測（影片座標）
-let smooth=null;         // 平滑後嘅框
-let vx=0, vy=0;          // 中心點速度（px/frame）
-let lastSeen=0, cycle=0;
-let detFps=0, drawFps=0, detCount=0, drawCount=0, fpsClock=performance.now();
-let knnBall=false, knnConf=0, knnTick=0;
-let lastSent='', lastHeartbeat=0, capturing=false;
-// ---- Edge Impulse FOMO ----
+// ===== 狀態 =====
 let ei=null, eiReady=false, eiLabel='football';
 let EI_W=160, EI_H=160, eiFeat=null, eiThreshId=null;
-let engine='fomo', fitMode='squash', eiThresh=0.5, boxScale=0.18;
+let eiThresh=0.5, fitMode='squash';
+let sizeMode='auto', expand=1.6, fixedScale=0.18;
 const eiCanvas=document.createElement('canvas');
 const eiCtx=eiCanvas.getContext('2d',{willReadFrequently:true});
 
-let shots=[], recTimer=null;             // 訓練相收集
-let showAxis=true;                       // 座標尺顯示開關
-let lastAnalyze=0;                       // 座標分析節流
-let pos={x:0,y:0,side:'',valid:false};    // 座標分析結果（同追蹤框分開）
+let running=false, stream=null, facing='environment';
+let track=null, smooth=null, vx=0, vy=0, lastSeen=0;
+let detFps=0, drawFps=0, detCount=0, drawCount=0, fpsClock=performance.now();
+let showAxis=true, lastAnalyze=0;
+let pos={x:0,y:0,side:'',valid:false};
+let lastSent='', lastHeartbeat=0;
+let shots=[], recTimer=null, capturing=false;
+let isFs=false;
 
 const UART_SERVICE='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 const UART_RX='6e400002-b5a3-f393-e0a9-e50e24dcca9e';
-let btDevice=null, rxChar=null;
+let btDevice=null, rxChar=null, btBusy=false;
 
-// setTimeout 最少有 4ms 延遲；MessageChannel 幾乎 0ms，偵測迴圈快好多
+// 幾乎零延遲的讓步（setTimeout 最少有 4 毫秒延遲）
 const yieldNow=(()=>{
   const ch=new MessageChannel(); let q=[];
   ch.port1.onmessage=()=>{ const c=q; q=[]; c.forEach(f=>f()); };
@@ -383,11 +404,11 @@ function setPill(el,on,a,b){
 }
 
 if(!navigator.bluetooth){
-  btWarn.innerHTML='<div class="warnbox">⚠️ 呢個瀏覽器唔支援 Web Bluetooth，偵測功能照用得，但連唔到 micro:bit。<br>' +
-    'iPad／iPhone 請用 App Store 嘅 <b>Bluefy</b> 瀏覽器；電腦請用 <b>Chrome</b> 或 <b>Edge</b>。</div>';
+  btWarn.innerHTML='<div class="warnbox">⚠️ 此瀏覽器不支援 Web Bluetooth。偵測功能仍可使用，但無法連接 micro:bit。<br>'+
+    'iPad 或 iPhone 請安裝 App Store 的 <b>Bluefy</b> 瀏覽器；電腦請使用 <b>Chrome</b> 或 <b>Edge</b>。</div>';
 }
 
-// ===== 載入你自己訓練嘅 FOMO 模型 =====
+// ===== 載入 FOMO 模型 =====
 (async()=>{
   try{
     ei=new EdgeImpulseClassifier();
@@ -398,44 +419,26 @@ if(!navigator.bluetooth){
     eiFeat=new Float32Array(pr.input_features_count);
     if(pr.labels&&pr.labels.length) eiLabel=pr.labels[0];
     const th=(pr.thresholds||[]).find(t=>t.type==='object_detection');
-    if(th){ eiThreshId=th.id; }
-    applyEiThreshold(0.5);
+    if(th) eiThreshId=th.id;
+    applyThreshold(0.5);
     eiReady=true;
-    log(`FOMO 模型就緒：${pj.owner}/${pj.name} v${pj.deploy_version}`);
-    log(`輸入 ${EI_W}×${EI_H}｜${pr.image_channel_count===1?'灰階':'彩色'}｜標籤「${eiLabel}」`);
+    setPill(pillModel,true,`模型：${pj.name} ✔`,'');
+    log(`模型載入成功：${pj.owner} / ${pj.name} 第 ${pj.deploy_version} 版`);
+    log(`輸入 ${EI_W}×${EI_H}，${pr.image_channel_count===1?'灰階':'彩色'}，標籤「${eiLabel}」`);
   }catch(e){
-    eiReady=false; engine='coco'; selEngine.value='coco';
-    log('FOMO 未載入（'+e.message+'），改用內置 COCO-SSD');
-  }
-})();
-
-(async()=>{
-  try{
-    await tf.setBackend('webgl');
-    tf.env().set('WEBGL_FORCE_F16_TEXTURES',true);   // 半精度：iPad／手機快好多
-    tf.env().set('WEBGL_PACK',true);
-    tf.env().set('WEBGL_FLUSH_THRESHOLD',1);
-    await tf.ready();
-    cocoModel=await cocoSsd.load({base:'lite_mobilenet_v2'});  // 最快嗰個版本
-    mobilenetModel=await mobilenet.load({version:2,alpha:0.5}); // 細模型，拍照學習夠用
-    knn=knnClassifier.create();
-    // 預熱：先跑一次空推論，令第一幀唔會特別慢
-    const warm=document.createElement('canvas'); warm.width=INF_W; warm.height=INF_H;
-    warm.getContext('2d').fillRect(0,0,INF_W,INF_H);
-    await cocoModel.detect(warm,1);
-    mobilenetModel.infer(warm,true).dispose();
-    setPill(pillModel,true,`模型：就緒 ✔ (${tf.getBackend()})`,'');
-    log('模型載入完成並已預熱，後端：'+tf.getBackend());
-  }catch(e){
+    eiReady=false;
     setPill(pillModel,false,'','模型：載入失敗');
     log('模型載入失敗：'+e.message);
+    btWarn.innerHTML+='<div class="warnbox">❌ 找不到模型檔案。請確認 <code>edge-impulse-standalone.js</code> 及 '+
+      '<code>.wasm</code> 與本網頁放在同一資料夾，並且是透過網頁伺服器開啟（不能直接雙擊檔案）。</div>';
   }
 })();
 
+// ===== 鏡頭 =====
 async function startCamera(){
   if(stream) stream.getTracks().forEach(t=>t.stop());
   stream=await navigator.mediaDevices.getUserMedia({
-    video:{facingMode:{ideal:facing},width:{ideal:P.camW},height:{ideal:P.camH},frameRate:{ideal:30}},
+    video:{facingMode:{ideal:facing},width:{ideal:RES.w},height:{ideal:RES.h},frameRate:{ideal:30}},
     audio:false
   });
   video.srcObject=stream;
@@ -446,59 +449,49 @@ async function startCamera(){
 }
 
 btnCam.addEventListener('click',async()=>{
+  if(!eiReady){ log('模型尚未就緒，請稍候再試'); return; }
   try{
     await startCamera();
     running=true;
-    btnCam.disabled=true; btnSwitch.disabled=false;
+    btnCam.disabled=true;
+    btnFs.disabled=btnSwitch.disabled=btnRec.disabled=false;
     btnBt.disabled=!navigator.bluetooth;
-    btnShotBall.disabled=btnShotNone.disabled=btnLearnReset.disabled=false;
-    btnRec.disabled=false;
     log(`鏡頭已開啟 ${video.videoWidth}×${video.videoHeight}`);
-    detectLoop(); drawLoop(); knnLoop();
-  }catch(e){ log('開唔到鏡頭：'+e.message); }
+    detectLoop(); drawLoop();
+  }catch(e){ log('無法開啟鏡頭：'+e.message); }
 });
 
 btnSwitch.addEventListener('click',async()=>{
   facing = facing==='environment' ? 'user' : 'environment';
-  try{ await startCamera(); log('已切換鏡頭：'+(facing==='user'?'前鏡':'後鏡')); }
+  try{ await startCamera(); log('已切換至'+(facing==='user'?'前置':'後置')+'鏡頭'); }
   catch(e){ log('切換失敗：'+e.message); }
 });
 
-async function applyPreset(key,restartCam){
-  P=PRESETS[key];
-  INF_W=P.infW; INF_H=P.infH; ROI_SIZE=P.roi; FULL_EVERY=P.full;
-  infCanvas.width=INF_W; infCanvas.height=INF_H;
-  roiCanvas.width=ROI_SIZE; roiCanvas.height=ROI_SIZE;
-  selPerf.value=key;
-  if(restartCam && running){ try{ await startCamera(); }catch(e){} }
-  log('效能模式：'+P.name+`（推論 ${INF_W}×${INF_H}）`);
+// ===== 全螢幕 =====
+function enterFs(){
+  isFs=true;
+  videoBox.classList.add('fs');
+  fsHud.appendChild(statusbar);
+  btnFs.textContent='⛶ 離開全螢幕';
+  if(videoBox.requestFullscreen) videoBox.requestFullscreen().catch(()=>{});
+  else if(videoBox.webkitRequestFullscreen) videoBox.webkitRequestFullscreen();
+  if(screen.orientation&&screen.orientation.lock) screen.orientation.lock('landscape').catch(()=>{});
 }
-selPerf.addEventListener('change',()=>{ autoTuned=true; applyPreset(selPerf.value,true); });
-
-function applyEiThreshold(v){
-  eiThresh=v;
-  if(eiThreshId!==null&&ei){ try{ ei.setThreshold({id:eiThreshId,min_score:Math.max(0.05,v-0.05)}); }catch(e){} }
+function exitFs(){
+  isFs=false;
+  videoBox.classList.remove('fs');
+  document.querySelector('.card').insertBefore(statusbar,btnFs.parentElement);
+  btnFs.textContent='⛶ 全螢幕';
+  if(document.fullscreenElement&&document.exitFullscreen) document.exitFullscreen().catch(()=>{});
+  else if(document.webkitFullscreenElement&&document.webkitExitFullscreen) document.webkitExitFullscreen();
+  if(screen.orientation&&screen.orientation.unlock) try{ screen.orientation.unlock(); }catch(e){}
 }
-selEngine.addEventListener('change',()=>{
-  if(selEngine.value==='fomo'&&!eiReady){
-    log('FOMO 未載入，維持 COCO-SSD'); selEngine.value='coco'; return;
-  }
-  engine=selEngine.value; track=null; smooth=null;
-  log('偵測引擎：'+(engine==='fomo'?'我嘅 FOMO 模型':'內置 COCO-SSD'));
-});
-selFit.addEventListener('change',()=>{ fitMode=selFit.value; log('影像對齊：'+fitMode); });
-rngTh.addEventListener('input',()=>{
-  const v=parseFloat(rngTh.value); thVal.textContent=v.toFixed(2); applyEiThreshold(v);
-});
-rngBs.addEventListener('input',()=>{
-  boxScale=parseInt(rngBs.value)/100; bsVal.textContent=rngBs.value+'%';
-});
+btnFs.addEventListener('click',()=>{ isFs?exitFs():enterFs(); });
+fsClose.addEventListener('click',exitFs);
+document.addEventListener('fullscreenchange',()=>{ if(!document.fullscreenElement&&isFs) exitFs(); });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&isFs) exitFs(); });
 
-btnAxis.addEventListener('click',()=>{
-  showAxis=!showAxis;
-  btnAxis.textContent = showAxis ? '隱藏座標尺' : '顯示座標尺';
-});
-
+// ===== 藍牙 =====
 btnBt.addEventListener('click',async()=>{
   if(btDevice&&btDevice.gatt.connected){ btDevice.gatt.disconnect(); return; }
   try{
@@ -507,18 +500,17 @@ btnBt.addEventListener('click',async()=>{
     });
     btDevice.addEventListener('gattserverdisconnected',()=>{
       rxChar=null; setPill(pillBt,false,'','micro:bit：未連接');
-      btnBt.textContent='連接 micro:bit'; log('micro:bit 已斷線');
+      btnBt.textContent='連接 micro:bit'; log('micro:bit 已中斷連接');
     });
     const server=await btDevice.gatt.connect();
     const service=await server.getPrimaryService(UART_SERVICE);
     rxChar=await service.getCharacteristic(UART_RX);
     setPill(pillBt,true,'micro:bit：已連接 ✔','');
-    btnBt.textContent='斷開 micro:bit';
+    btnBt.textContent='中斷 micro:bit';
     log('已連接 '+btDevice.name); lastSent='';
   }catch(e){ log('藍牙連接失敗：'+e.message); }
 });
 
-let btBusy=false;
 async function sendToMicrobit(text){
   if(!rxChar||btBusy) return;
   btBusy=true;
@@ -527,129 +519,83 @@ async function sendToMicrobit(text){
   finally{ btBusy=false; }
 }
 
-// ===== 偵測迴圈：全畫面掃描 + 局部 ROI 快速追蹤 =====
-// ===== FOMO 偵測：全畫面一次過，唔使 ROI（本身已經好快） =====
+// ===== FOMO 偵測 =====
 function detectFOMO(){
   let sx=0, sy=0, sw=overlay.width, sh=overlay.height;
-  if(fitMode==='crop'){                       // 置中裁切最大正方形
+  if(fitMode==='crop'){
     const side=Math.min(overlay.width,overlay.height);
     sx=(overlay.width-side)/2; sy=(overlay.height-side)/2; sw=sh=side;
   }
   eiCtx.drawImage(video,sx,sy,sw,sh,0,0,EI_W,EI_H);
   const d=eiCtx.getImageData(0,0,EI_W,EI_H).data;
-  // Edge Impulse 要每個像素打包成一個數字 0xRRGGBB
+  // Edge Impulse 要求每個像素打包成一個數值 0xRRGGBB
   for(let i=0,p=0;i<d.length;i+=4,p++) eiFeat[p]=(d[i]<<16)|(d[i+1]<<8)|d[i+2];
 
   const hits=ei.classify(eiFeat).filter(o=>o.label===eiLabel&&o.value>=eiThresh);
   if(!hits.length) return null;
   const b=hits.reduce((a,c)=>a.value>c.value?a:c);
 
-  // FOMO 回傳嘅係中心格：x,y 係格左上角，加返半格先係中心
+  // FOMO 輸出的是中心格：x、y 為方格左上角
   const cx=sx+(b.x+b.width /2)/EI_W*sw;
   const cy=sy+(b.y+b.height/2)/EI_H*sh;
-  // FOMO 冇真實尺寸，用固定比例畫框（可用滑桿調）
-  const size=Math.min(overlay.width,overlay.height)*boxScale;
-  return {x:cx-size/2, y:cy-size/2, w:size, h:size, score:b.value};
-}
 
-// ===== COCO-SSD 偵測：ROI 局部追蹤 + 定期全掃描 =====
-async function detectCOCO(){
-  const useROI = smooth && (performance.now()-lastSeen<TRACK_HOLD) && (cycle++ % FULL_EVERY !== 0);
-
-  if(useROI){
-    const pad=1.9;
-    const cx=smooth.x+smooth.w/2+vx*2, cy=smooth.y+smooth.h/2+vy*2;
-    const side=Math.max(smooth.w,smooth.h)*pad;
-    const sx=Math.max(0,Math.min(overlay.width-side,cx-side/2));
-    const sy=Math.max(0,Math.min(overlay.height-side,cy-side/2));
-    const sw=Math.min(side,overlay.width-sx), sh=Math.min(side,overlay.height-sy);
-    roiCtx.drawImage(video,sx,sy,sw,sh,0,0,ROI_SIZE,ROI_SIZE);
-    const p=(await cocoModel.detect(roiCanvas,3)).filter(o=>o.class==='sports ball'&&o.score>0.35);
-    if(p.length){
-      const b=p.reduce((a,c)=>a.score>c.score?a:c);
-      return { x:sx+b.bbox[0]*sw/ROI_SIZE, y:sy+b.bbox[1]*sh/ROI_SIZE,
-               w:b.bbox[2]*sw/ROI_SIZE, h:b.bbox[3]*sh/ROI_SIZE, score:b.score };
-    }
+  let w,h;
+  if(sizeMode==='auto'){
+    // 模型回傳的格數會隨物件變大而增加，乘上膨脹倍數即為框大小
+    w=(b.width /EI_W)*sw*expand;
+    h=(b.height/EI_H)*sh*expand;
+    const minSide=Math.min(overlay.width,overlay.height);
+    w=Math.max(minSide*0.05,w); h=Math.max(minSide*0.05,h);
+  }else{
+    w=h=Math.min(overlay.width,overlay.height)*fixedScale;
   }
-
-  infCtx.drawImage(video,0,0,INF_W,INF_H);
-  const TH = knnBall ? 0.28 : 0.45;
-  const p=(await cocoModel.detect(infCanvas,5)).filter(o=>o.class==='sports ball'&&o.score>TH);
-  if(p.length){
-    const b=p.reduce((a,c)=>a.score>c.score?a:c);
-    const kx=overlay.width/INF_W, ky=overlay.height/INF_H;
-    return { x:b.bbox[0]*kx, y:b.bbox[1]*ky, w:b.bbox[2]*kx, h:b.bbox[3]*ky, score:b.score };
-  }
-  return null;
+  return {x:cx-w/2, y:cy-h/2, w, h, score:b.value};
 }
 
 async function detectLoop(){
   while(running){
     if(capturing){ await new Promise(r=>setTimeout(r,30)); continue; }
     try{
-      const found = (engine==='fomo'&&eiReady) ? detectFOMO() : await detectCOCO();
+      const found=detectFOMO();
       if(found){ track=found; lastSeen=performance.now(); }
       detCount++;
     }catch(e){}
-    await yieldNow(); // 幾乎零延遲咁交還控制權，畫面照更新
+    await yieldNow();
   }
 }
 
-// ===== KNN（拍照學習）獨立慢速迴圈，唔阻住主偵測 =====
-async function knnLoop(){
-  while(running){
-    await new Promise(r=>setTimeout(r,250));
-    if(capturing||!knn) continue;
-    const c=knn.getClassExampleCount();
-    if(!((c['ball']||0)>0&&(c['none']||0)>0)){ knnBall=false; continue; }
-    try{
-      infCtx.drawImage(video,0,0,INF_W,INF_H);
-      const logits=mobilenetModel.infer(infCanvas,true);
-      const r=await knn.predictClass(logits,5);
-      logits.dispose();
-      knnConf=Math.round(r.confidences[r.label]*100);
-      knnBall=(r.label==='ball'&&knnConf>=75);
-      learnResult.textContent=`你教嘅模型：${r.label==='ball'?'⚽ 有足球':'✖ 無足球'}（信心 ${knnConf}%）`;
-    }catch(e){}
-  }
-}
-
-// ===== 繪圖迴圈：每幀 rAF =====
+// ===== 繪圖 =====
 function drawLoop(){
   if(!running) return;
   const now=performance.now();
   ctx.clearRect(0,0,overlay.width,overlay.height);
 
-  // ---------- 【A】追蹤框：只要見到足球就持續跟住畫，同座標分析無關 ----------
+  // 追蹤框：只要偵測到足球就持續跟隨
   const alive = track && (now-lastSeen<TRACK_HOLD);
   if(alive){
     if(!smooth) smooth={...track};
     else{
       const px=smooth.x+smooth.w/2, py=smooth.y+smooth.h/2;
-      smooth.x+=(track.x-smooth.x)*SMOOTH; smooth.y+=(track.y-smooth.y)*SMOOTH;
-      smooth.w+=(track.w-smooth.w)*SMOOTH; smooth.h+=(track.h-smooth.h)*SMOOTH;
+      smooth.x+=(track.x-smooth.x)*SMOOTH_POS;
+      smooth.y+=(track.y-smooth.y)*SMOOTH_POS;
+      smooth.w+=(track.w-smooth.w)*SMOOTH_SIZE;   // 尺寸用較慢的平滑
+      smooth.h+=(track.h-smooth.h)*SMOOTH_SIZE;
       smooth.score=track.score;
       vx=(smooth.x+smooth.w/2)-px; vy=(smooth.y+smooth.h/2)-py;
     }
   }else{ smooth=null; vx=vy=0; }
 
-  // ---------- 【B】座標分析：獨立運作，節流至每 ANALYZE_MS 一次 ----------
-  if(now-lastAnalyze>=ANALYZE_MS){
-    lastAnalyze=now;
-    analyzePosition();
-  }
+  // 座標分析（獨立節流）
+  if(now-lastAnalyze>=ANALYZE_MS){ lastAnalyze=now; analyzePosition(); }
 
-  // ---------- 座標尺（座標分析嘅視覺呈現，可開關） ----------
   if(showAxis) drawAxisRuler();
 
-  // ---------- 畫追蹤框本身（標籤只顯示信心度，唔混入座標） ----------
   if(smooth){
     const cx=smooth.x+smooth.w/2, cy=smooth.y+smooth.h/2;
-
     ctx.strokeStyle='#f2b705'; ctx.lineWidth=4;
     ctx.strokeRect(smooth.x,smooth.y,smooth.w,smooth.h);
 
-    const label=`${engine==='fomo'&&eiReady?'⚽':'📦'} 足球 ${Math.round(smooth.score*100)}%`;
+    const label=`足球 ${Math.round(smooth.score*100)}%`;
     ctx.font='bold 18px "Noto Sans TC",sans-serif';
     const tw=ctx.measureText(label).width;
     ctx.fillStyle='#f2b705';
@@ -665,66 +611,42 @@ function drawLoop(){
     ctx.beginPath(); ctx.arc(cx,cy,5,0,Math.PI*2); ctx.fillStyle='#ff4b4b'; ctx.fill();
   }
 
-  if(capturing) drawCaptureGuide();
-
   drawCount++;
   if(now-fpsClock>500){
     detFps=Math.round(detCount*1000/(now-fpsClock));
     drawFps=Math.round(drawCount*1000/(now-fpsClock));
     detCount=drawCount=0; fpsClock=now;
-    fpsEl.textContent=`偵測 ${detFps} FPS｜畫面 ${drawFps} FPS｜${engine==='fomo'&&eiReady?'FOMO':'COCO '+P.name}`;
-    if(!autoTuned && P!==PRESETS.fast && detFps>0 && detFps<8){
-      if(!lowFpsSince) lowFpsSince=now;
-      else if(now-lowFpsSince>3000){
-        autoTuned=true; applyPreset('fast',true);
-        log('偵測 FPS 偏低，已自動轉做「極速」模式');
-      }
-    }else lowFpsSince=0;
+    fpsEl.textContent=`偵測 ${detFps} FPS｜畫面 ${drawFps} FPS`;
   }
   requestAnimationFrame(drawLoop);
 }
 
-// ===== 座標分析：獨立模組，讀追蹤框位置 → 算 XY 百分比座標 → 更新狀態 → 傳藍牙 =====
+// ===== 座標分析 =====
 function analyzePosition(){
   const now=performance.now();
-
   if(smooth){
     const cx=smooth.x+smooth.w/2, cy=smooth.y+smooth.h/2;
     pos.x=Math.round(Math.min(COORD_MAX,Math.max(0, cx/overlay.width *COORD_MAX)));
     pos.y=Math.round(Math.min(COORD_MAX,Math.max(0, cy/overlay.height*COORD_MAX)));
     pos.side = pos.x<LEFT_EDGE ? '左' : (pos.x>RIGHT_EDGE ? '右' : '中');
     pos.valid=true;
-  }else{
-    pos.valid=false;
-  }
+  }else pos.valid=false;
 
-  // 三態：有框追蹤中 / 認到但定位唔到（只有拍照學習模型認到，佢無位置資訊）/ 見唔到
-  pillBall.classList.remove('on','off','mid');
-  if(smooth){
-    pillBall.classList.add('on');
-    pillBall.innerHTML='<span class="dot"></span>足球：追蹤中 ⚽';
-  }else if(knnBall){
-    pillBall.classList.add('mid');
-    pillBall.innerHTML='<span class="dot"></span>足球：認到，但定位唔到';
-  }else{
-    pillBall.classList.add('off');
-    pillBall.innerHTML='<span class="dot"></span>足球：未見到';
-  }
+  setPill(pillBall,!!smooth,'足球：追蹤中 ⚽','足球：未偵測到');
   setPill(pillPos,pos.valid, pos.valid?`座標：X ${pos.x}，Y ${pos.y}（${pos.side}邊）`:'', '座標：—');
 
-  const msg = pos.valid ? `BALL,${pos.x},${pos.y}` : (knnBall ? 'BALL,-1,-1' : 'NONE');
+  const msg = pos.valid ? `BALL,${pos.x},${pos.y}` : 'NONE';
   if(msg!==lastSent || now-lastHeartbeat>2000){
     lastSent=msg; lastHeartbeat=now; sendToMicrobit(msg);
   }
 }
 
-// 座標尺：上邊 X 軸、左邊 Y 軸，貼邊細條，唔遮住畫面
+// ===== 座標尺 =====
 function drawAxisRuler(){
   const W=overlay.width, H=overlay.height, T=26;
   ctx.save();
   ctx.fillStyle='rgba(0,0,0,0.40)';
-  ctx.fillRect(0,0,W,T);
-  ctx.fillRect(0,T,T,H-T);
+  ctx.fillRect(0,0,W,T); ctx.fillRect(0,T,T,H-T);
 
   ctx.strokeStyle='rgba(255,255,255,0.45)'; ctx.lineWidth=1;
   ctx.font='bold 11px "Noto Sans TC",sans-serif';
@@ -739,7 +661,6 @@ function drawAxisRuler(){
     if(major&&v>0&&v<COORD_MAX) ctx.fillText(v,3,py-3);
   }
 
-  // 左／中／右分界（淡淡兩條）
   ctx.setLineDash([6,8]); ctx.strokeStyle='rgba(255,255,255,0.22)';
   for(const e of [LEFT_EDGE,RIGHT_EDGE]){
     const px=e/COORD_MAX*W;
@@ -749,15 +670,12 @@ function drawAxisRuler(){
 
   if(pos.valid){
     const px=pos.x/COORD_MAX*W, py=T+pos.y/COORD_MAX*(H-T);
-    // 指示線
     ctx.strokeStyle='rgba(242,183,5,0.55)'; ctx.lineWidth=2;
     ctx.beginPath(); ctx.moveTo(px,T); ctx.lineTo(px,H); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(T,py); ctx.lineTo(W,py); ctx.stroke();
-    // 尺上嘅三角標記
     ctx.fillStyle='#f2b705';
     ctx.beginPath(); ctx.moveTo(px,T); ctx.lineTo(px-8,T-11); ctx.lineTo(px+8,T-11); ctx.closePath(); ctx.fill();
     ctx.beginPath(); ctx.moveTo(T,py); ctx.lineTo(T-11,py-8); ctx.lineTo(T-11,py+8); ctx.closePath(); ctx.fill();
-    // 讀數
     const t=`X ${pos.x}  Y ${pos.y}  ${pos.side}`;
     ctx.font='bold 17px "Noto Sans TC",sans-serif';
     const tw=ctx.measureText(t).width;
@@ -768,52 +686,29 @@ function drawAxisRuler(){
   ctx.restore();
 }
 
-// 拍照時嘅對準圈：叫用家將個波填滿呢個圈
-function drawCaptureGuide(){
-  const cx=overlay.width/2, cy=overlay.height/2;
-  const r=Math.min(overlay.width,overlay.height)*0.40;
-  ctx.save();
-  ctx.strokeStyle='rgba(255,255,255,0.9)'; ctx.lineWidth=5; ctx.setLineDash([18,14]);
-  ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.stroke();
-  ctx.setLineDash([]);
-  const t='將足球填滿呢個圈';
-  ctx.font='bold 22px "Noto Sans TC",sans-serif';
-  const tw=ctx.measureText(t).width;
-  ctx.fillStyle='rgba(0,0,0,0.55)';
-  ctx.fillRect(cx-tw/2-12,cy-r-44,tw+24,32);
-  ctx.fillStyle='#fff';
-  ctx.fillText(t,cx-tw/2,cy-r-21);
-  ctx.restore();
+// ===== 控制項 =====
+function applyThreshold(v){
+  eiThresh=v;
+  if(eiThreshId!==null&&ei){ try{ ei.setThreshold({id:eiThreshId,min_score:Math.max(0.05,v-0.05)}); }catch(e){} }
 }
+selFit.addEventListener('change',()=>{ fitMode=selFit.value; log('影像對齊：'+(fitMode==='crop'?'置中裁切':'拉伸')); });
+selRes.addEventListener('change',async()=>{
+  RES=RESOLUTIONS[selRes.value];
+  log('鏡頭解像度：'+RES.name);
+  if(running){ try{ await startCamera(); }catch(e){ log('切換失敗：'+e.message); } }
+});
+selAxis.addEventListener('change',()=>{ showAxis=(selAxis.value==='on'); });
+selSize.addEventListener('change',()=>{
+  sizeMode=selSize.value;
+  lblExpand.style.display = sizeMode==='auto' ? '' : 'none';
+  lblFixed.style.display  = sizeMode==='auto' ? 'none' : '';
+  log('偵測框：'+(sizeMode==='auto'?'自動跟隨物件大小':'固定大小'));
+});
+rngTh.addEventListener('input',()=>{ const v=parseFloat(rngTh.value); thVal.textContent=v.toFixed(2); applyThreshold(v); });
+rngEx.addEventListener('input',()=>{ expand=parseFloat(rngEx.value); exVal.textContent=expand.toFixed(1)+'×'; });
+rngBs.addEventListener('input',()=>{ fixedScale=parseInt(rngBs.value)/100; bsVal.textContent=rngBs.value+'%'; });
 
-// ===== 連拍學習 =====
-async function burstCapture(label,shots=12){
-  if(capturing) return;
-  capturing=true;
-  btnShotBall.disabled=btnShotNone.disabled=true;
-  const name = label==='ball' ? '足球' : '背景';
-  log(`開始連拍 ${name}…請慢慢轉動角度`);
-  for(let i=0;i<shots;i++){
-    await new Promise(r=>setTimeout(r,140));
-    try{
-      infCtx.drawImage(video,0,0,INF_W,INF_H);
-      const logits=mobilenetModel.infer(infCanvas,true);
-      knn.addExample(logits,label);
-      logits.dispose();
-    }catch(e){}
-    flashEl.classList.add('on');
-    setTimeout(()=>flashEl.classList.remove('on'),60);
-    const c=knn.getClassExampleCount();
-    learnCount.textContent=`樣本：足球 ${c['ball']||0} 張／背景 ${c['none']||0} 張（拍緊 ${i+1}/${shots}）`;
-  }
-  const c=knn.getClassExampleCount();
-  learnCount.textContent=`樣本：足球 ${c['ball']||0} 張／背景 ${c['none']||0} 張`;
-  log(`${name} 連拍完成，加咗 ${shots} 個樣本`);
-  capturing=false;
-  btnShotBall.disabled=btnShotNone.disabled=false;
-}
-
-// ===== 收集訓練相：存落記憶體，之後一次過下載 =====
+// ===== 收集訓練相片 =====
 const shotCanvas=document.createElement('canvas');
 const shotCtx=shotCanvas.getContext('2d');
 
@@ -835,12 +730,12 @@ btnRec.addEventListener('click',()=>{
   }else{
     recTimer=setInterval(grabShot,800);
     btnRec.textContent='⏸ 停止收集';
-    log('開始收集訓練相（每 0.8 秒一張）');
+    log('開始收集訓練相片（每 0.8 秒一張）');
   }
 });
 
 btnDl.addEventListener('click',async()=>{
-  log(`開始下載 ${shots.length} 張…瀏覽器問「允許多個下載」請撳允許`);
+  log(`開始下載 ${shots.length} 張。若瀏覽器詢問「允許多個下載」，請按允許。`);
   const stamp=new Date().toISOString().slice(0,10);
   for(let i=0;i<shots.length;i++){
     const a=document.createElement('a');
@@ -855,16 +750,7 @@ btnDl.addEventListener('click',async()=>{
 btnRecClear.addEventListener('click',()=>{
   shots=[]; recCount.textContent='已收集：0 張';
   btnDl.disabled=btnRecClear.disabled=true;
-  log('已清除訓練相');
-});
-
-btnShotBall.addEventListener('click',()=>burstCapture('ball'));
-btnShotNone.addEventListener('click',()=>burstCapture('none'));
-btnLearnReset.addEventListener('click',()=>{
-  knn.clearAllClasses(); knnBall=false;
-  learnCount.textContent='樣本：足球 0 張／背景 0 張';
-  learnResult.textContent='已清除。兩類各拍 2～3 次就用得。';
-  log('已清除學習樣本');
+  log('已清除訓練相片');
 });
 </script>
 </body>
