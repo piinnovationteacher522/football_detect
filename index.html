@@ -82,7 +82,7 @@
 <div class="wrap">
   <header>
     <h1>⚽ 足球偵測 × micro:bit 藍牙</h1>
-    <p>高速追蹤 · XY 格網定位 · 拍照教 AI 認你隻波</p>
+    <p>高速追蹤 · XY 座標定位 · 拍照教 AI 認你隻波</p>
   </header>
 
   <div class="grid">
@@ -97,13 +97,13 @@
       <div class="statusbar">
         <span class="pill" id="pillModel"><span class="dot"></span>模型：載入中…</span>
         <span class="pill off" id="pillBall"><span class="dot"></span>足球：未見到</span>
-        <span class="pill off" id="pillPos"><span class="dot"></span>位置：—</span>
+        <span class="pill off" id="pillPos"><span class="dot"></span>座標：—</span>
         <span class="pill off" id="pillBt"><span class="dot"></span>micro:bit：未連接</span>
       </div>
       <div class="btnrow">
         <button id="btnCam">開啟鏡頭</button>
         <button id="btnSwitch" class="secondary" disabled>切換鏡頭</button>
-        <button id="btnGrid" class="secondary">隱藏格網</button>
+        <button id="btnAxis" class="secondary">隱藏座標尺</button>
         <button id="btnBt" class="gold" disabled>連接 micro:bit</button>
       </div>
       <div id="btWarn"></div>
@@ -156,8 +156,9 @@
         <li>用「當 UART 收到資料（以 新行 分隔）」讀字串。</li>
       </ol>
 
-      <b>訊號格式：</b>見到波 → <code>BALL,x,y</code>（例 <code>BALL,3,2</code>；X 左至右 1~5，Y 上至下 1~4）；見唔到 → <code>NONE</code>。位置一變即傳，另每 2 秒重覆現況。<br>
-      <b>MakeCode 拆座標：</b>用 Text 類別嘅 <code>split</code> 以 <code>,</code> 分割，第 1 項係 X、第 2 項係 Y，再 <code>parse to number</code>。X ≤ 2 = 左，X = 3 = 中，X ≥ 4 = 右。
+      <b>訊號格式：</b>見到波 → <code>BALL,x,y</code>（例 <code>BALL,72,38</code>）。X、Y 都係 <b>0～100 嘅百分比座標</b>：X 由左邊 0 至右邊 100，Y 由頂 0 至底 100，畫面正中係 50,50。見唔到波 → <code>NONE</code>。座標一變即傳，另每 2 秒重覆現況。<br>
+      <b>MakeCode 拆座標：</b>用 Text 類別嘅 <code>split</code> 以 <code>,</code> 分割，第 1 項係 X、第 2 項係 Y，再 <code>parse to number</code>。<br>
+      <b>判斷方向：</b>X &lt; 40 = 左，40～60 = 中，X &gt; 60 = 右。想控制摩打追波，可以直接用 <code>X - 50</code> 做誤差值（負數即係波喺左邊，正數即係右邊），數值越大代表偏得越遠，好啱用嚟做比例控制。
     </div>
   </details>
 </div>
@@ -175,7 +176,7 @@ const pillPos=document.getElementById('pillPos');
 const pillBt=document.getElementById('pillBt');
 const btnCam=document.getElementById('btnCam');
 const btnSwitch=document.getElementById('btnSwitch');
-const btnGrid=document.getElementById('btnGrid');
+const btnAxis=document.getElementById('btnAxis');
 const btnBt=document.getElementById('btnBt');
 const btnShotBall=document.getElementById('btnShotBall');
 const btnShotNone=document.getElementById('btnShotNone');
@@ -184,7 +185,8 @@ const learnCount=document.getElementById('learnCount');
 const learnResult=document.getElementById('learnResult');
 const btWarn=document.getElementById('btWarn');
 
-const GRID_COLS=5, GRID_ROWS=4;
+const COORD_MAX=100;             // 座標範圍：X、Y 各 0～100（畫面百分比）
+const LEFT_EDGE=40, RIGHT_EDGE=60; // 左／中／右判斷界線
 const INF_W=320, INF_H=240;      // 全畫面推論解析度（細啲＝快啲）
 const ROI_SIZE=224;              // 局部追蹤推論解析度
 const FULL_EVERY=6;              // 每 6 個週期做一次全畫面掃描
@@ -208,9 +210,9 @@ let lastSeen=0, cycle=0;
 let detFps=0, drawFps=0, detCount=0, drawCount=0, fpsClock=performance.now();
 let knnBall=false, knnConf=0, knnTick=0;
 let lastSent='', lastHeartbeat=0, capturing=false;
-let showGrid=true;                       // 格網顯示開關
+let showAxis=true;                       // 座標尺顯示開關
 let lastAnalyze=0;                       // 座標分析節流
-let pos={gx:0,gy:0,side:'',valid:false};  // 座標分析結果（同追蹤框分開）
+let pos={x:0,y:0,side:'',valid:false};    // 座標分析結果（同追蹤框分開）
 
 const UART_SERVICE='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 const UART_RX='6e400002-b5a3-f393-e0a9-e50e24dcca9e';
@@ -275,9 +277,9 @@ btnSwitch.addEventListener('click',async()=>{
   catch(e){ log('切換失敗：'+e.message); }
 });
 
-btnGrid.addEventListener('click',()=>{
-  showGrid=!showGrid;
-  btnGrid.textContent = showGrid ? '隱藏格網' : '顯示格網';
+btnAxis.addEventListener('click',()=>{
+  showAxis=!showAxis;
+  btnAxis.textContent = showAxis ? '隱藏座標尺' : '顯示座標尺';
 });
 
 btnBt.addEventListener('click',async()=>{
@@ -393,17 +395,8 @@ function drawLoop(){
     analyzePosition();
   }
 
-  // ---------- 畫底層格網（可開關，屬於座標分析嘅視覺部分） ----------
-  const cw=overlay.width/GRID_COLS, ch=overlay.height/GRID_ROWS;
-  if(showGrid){
-    drawGrid(cw,ch);
-    if(pos.valid){
-      ctx.fillStyle='rgba(242,183,5,0.28)';
-      ctx.fillRect((pos.gx-1)*cw,(pos.gy-1)*ch,cw,ch);
-      ctx.strokeStyle='rgba(242,183,5,0.95)'; ctx.lineWidth=3;
-      ctx.strokeRect((pos.gx-1)*cw,(pos.gy-1)*ch,cw,ch);
-    }
-  }
+  // ---------- 座標尺（座標分析嘅視覺呈現，可開關） ----------
+  if(showAxis) drawAxisRuler();
 
   // ---------- 畫追蹤框本身（標籤只顯示信心度，唔混入座標） ----------
   if(smooth){
@@ -440,16 +433,15 @@ function drawLoop(){
   requestAnimationFrame(drawLoop);
 }
 
-// ===== 座標分析：獨立模組，讀追蹤框位置 → 算格仔 → 更新狀態 → 傳藍牙 =====
+// ===== 座標分析：獨立模組，讀追蹤框位置 → 算 XY 百分比座標 → 更新狀態 → 傳藍牙 =====
 function analyzePosition(){
   const now=performance.now();
-  const cw=overlay.width/GRID_COLS, ch=overlay.height/GRID_ROWS;
 
   if(smooth){
     const cx=smooth.x+smooth.w/2, cy=smooth.y+smooth.h/2;
-    pos.gx=Math.min(GRID_COLS,Math.max(1,Math.ceil(cx/cw)));
-    pos.gy=Math.min(GRID_ROWS,Math.max(1,Math.ceil(cy/ch)));
-    pos.side = pos.gx<=Math.floor(GRID_COLS/2)?'左':(pos.gx>Math.ceil(GRID_COLS/2)?'右':'中');
+    pos.x=Math.round(Math.min(COORD_MAX,Math.max(0, cx/overlay.width *COORD_MAX)));
+    pos.y=Math.round(Math.min(COORD_MAX,Math.max(0, cy/overlay.height*COORD_MAX)));
+    pos.side = pos.x<LEFT_EDGE ? '左' : (pos.x>RIGHT_EDGE ? '右' : '中');
     pos.valid=true;
   }else{
     pos.valid=false;
@@ -457,26 +449,60 @@ function analyzePosition(){
 
   const visible = !!smooth || knnBall;
   setPill(pillBall,visible,'足球：見到 ⚽（追蹤中）','足球：未見到');
-  setPill(pillPos,pos.valid, pos.valid?`位置：X${pos.gx}，Y${pos.gy}（${pos.side}邊）`:'', '位置：—');
+  setPill(pillPos,pos.valid, pos.valid?`座標：X ${pos.x}，Y ${pos.y}（${pos.side}邊）`:'', '座標：—');
 
-  const msg = pos.valid ? `BALL,${pos.gx},${pos.gy}` : (knnBall ? 'BALL,0,0' : 'NONE');
+  const msg = pos.valid ? `BALL,${pos.x},${pos.y}` : (knnBall ? 'BALL,-1,-1' : 'NONE');
   if(msg!==lastSent || now-lastHeartbeat>2000){
     lastSent=msg; lastHeartbeat=now; sendToMicrobit(msg);
   }
 }
 
-function drawGrid(cw,ch){
+// 座標尺：上邊 X 軸、左邊 Y 軸，貼邊細條，唔遮住畫面
+function drawAxisRuler(){
+  const W=overlay.width, H=overlay.height, T=26;
   ctx.save();
-  ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1;
-  for(let i=1;i<GRID_COLS;i++){ ctx.beginPath(); ctx.moveTo(i*cw,0); ctx.lineTo(i*cw,overlay.height); ctx.stroke(); }
-  for(let j=1;j<GRID_ROWS;j++){ ctx.beginPath(); ctx.moveTo(0,j*ch); ctx.lineTo(overlay.width,j*ch); ctx.stroke(); }
-  ctx.font='bold 13px "Noto Sans TC",sans-serif';
-  for(let j=0;j<GRID_ROWS;j++) for(let i=0;i<GRID_COLS;i++){
-    const t=`${i+1},${j+1}`;
-    ctx.fillStyle='rgba(0,0,0,0.35)';
-    ctx.fillRect(i*cw+3,j*ch+3,ctx.measureText(t).width+10,19);
-    ctx.fillStyle='rgba(255,255,255,0.75)';
-    ctx.fillText(t,i*cw+8,j*ch+17);
+  ctx.fillStyle='rgba(0,0,0,0.40)';
+  ctx.fillRect(0,0,W,T);
+  ctx.fillRect(0,T,T,H-T);
+
+  ctx.strokeStyle='rgba(255,255,255,0.45)'; ctx.lineWidth=1;
+  ctx.font='bold 11px "Noto Sans TC",sans-serif';
+  ctx.fillStyle='rgba(255,255,255,0.7)';
+  for(let v=0;v<=COORD_MAX;v+=10){
+    const major=(v%50===0);
+    const px=v/COORD_MAX*W;
+    ctx.beginPath(); ctx.moveTo(px,T); ctx.lineTo(px,T-(major?12:6)); ctx.stroke();
+    if(major&&v>0&&v<COORD_MAX) ctx.fillText(v,px+3,13);
+    const py=T+v/COORD_MAX*(H-T);
+    ctx.beginPath(); ctx.moveTo(T,py); ctx.lineTo(T-(major?12:6),py); ctx.stroke();
+    if(major&&v>0&&v<COORD_MAX) ctx.fillText(v,3,py-3);
+  }
+
+  // 左／中／右分界（淡淡兩條）
+  ctx.setLineDash([6,8]); ctx.strokeStyle='rgba(255,255,255,0.22)';
+  for(const e of [LEFT_EDGE,RIGHT_EDGE]){
+    const px=e/COORD_MAX*W;
+    ctx.beginPath(); ctx.moveTo(px,T); ctx.lineTo(px,H); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  if(pos.valid){
+    const px=pos.x/COORD_MAX*W, py=T+pos.y/COORD_MAX*(H-T);
+    // 指示線
+    ctx.strokeStyle='rgba(242,183,5,0.55)'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(px,T); ctx.lineTo(px,H); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(T,py); ctx.lineTo(W,py); ctx.stroke();
+    // 尺上嘅三角標記
+    ctx.fillStyle='#f2b705';
+    ctx.beginPath(); ctx.moveTo(px,T); ctx.lineTo(px-8,T-11); ctx.lineTo(px+8,T-11); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(T,py); ctx.lineTo(T-11,py-8); ctx.lineTo(T-11,py+8); ctx.closePath(); ctx.fill();
+    // 讀數
+    const t=`X ${pos.x}  Y ${pos.y}  ${pos.side}`;
+    ctx.font='bold 17px "Noto Sans TC",sans-serif';
+    const tw=ctx.measureText(t).width;
+    const bx=Math.min(W-tw-20,Math.max(T+6,px+12)), by=Math.min(H-12,Math.max(T+30,py-12));
+    ctx.fillStyle='#f2b705'; ctx.fillRect(bx,by-20,tw+14,26);
+    ctx.fillStyle='#3a2c00'; ctx.fillText(t,bx+7,by-2);
   }
   ctx.restore();
 }
