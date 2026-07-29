@@ -5,6 +5,64 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>足球偵測 × micro:bit</title>
+<!-- 你自己訓練嘅 Edge Impulse FOMO 模型（要同呢個 HTML 放喺同一資料夾） -->
+<script src="edge-impulse-standalone.js"></script>
+<script>
+// 依照 Edge Impulse 官方 run-impulse.js（瀏覽器版）
+let classifierInitialized=false;
+if(typeof Module!=='undefined'){ Module.onRuntimeInitialized=function(){ classifierInitialized=true; }; }
+class EdgeImpulseClassifier{
+  init(){
+    if(typeof Module==='undefined') return Promise.reject(new Error('搵唔到 edge-impulse-standalone.js'));
+    if(classifierInitialized===true){
+      const r=Module.init();
+      if(typeof r==='number'&&r!==0) return Promise.reject(new Error('init 失敗 code '+r));
+      return Promise.resolve();
+    }
+    return new Promise((resolve,reject)=>{
+      Module.onRuntimeInitialized=()=>{
+        classifierInitialized=true;
+        const r=Module.init();
+        if(typeof r==='number'&&r!==0) return reject(new Error('init 失敗 code '+r));
+        resolve();
+      };
+    });
+  }
+  getProjectInfo(){ return this._obj(Module.get_project(),Module.emcc_classification_project_t.prototype); }
+  getProperties(){ return this._obj(Module.get_properties(),Module.emcc_classification_properties_t.prototype); }
+  setThreshold(o){ const r=Module.set_threshold(o); if(!r.success) throw new Error(r.error); }
+  classify(rawData){
+    const h=this._heap(rawData);
+    const ret=Module.run_classifier(h.buffer.byteOffset,rawData.length,false);
+    Module._free(h.ptr);
+    if(ret.result!==0){ ret.delete(); throw new Error('分類失敗 err='+ret.result); }
+    const out=[];
+    for(let i=0;i<ret.size();i++){
+      const c=ret.get(i);
+      out.push({label:c.label,value:c.value,x:c.x,y:c.y,width:c.width,height:c.height});
+      c.delete();
+    }
+    ret.delete();
+    return out;
+  }
+  _heap(data){
+    const ta=data instanceof Float32Array?data:new Float32Array(data);
+    const n=ta.length*ta.BYTES_PER_ELEMENT;
+    const ptr=Module._malloc(n);
+    const hb=new Uint8Array(Module.HEAPU8.buffer,ptr,n);
+    hb.set(new Uint8Array(ta.buffer,ta.byteOffset,n));
+    return {ptr,buffer:hb};
+  }
+  _obj(o,proto){
+    const n={};
+    for(const k of Object.getOwnPropertyNames(proto)){
+      const d=Object.getOwnPropertyDescriptor(proto,k);
+      if(d&&typeof d.get==='function'){ try{ n[k]=o[k]; }catch(e){} }
+    }
+    return n;
+  }
+}
+</script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
@@ -64,6 +122,10 @@
   .btnrow > button{flex:1 1 auto;}
 
   select{font:inherit;padding:8px;border-radius:8px;border:1px solid #ccc;min-height:40px;}
+  .ctrlgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:12px;
+            background:#f4f6f3;padding:12px;border-radius:10px;}
+  .ctrlgrid label{font-size:.82rem;font-weight:600;color:#333;display:flex;flex-direction:column;gap:5px;}
+  .ctrlgrid input[type=range]{width:100%;}
 
   .hint{font-size:.84rem;color:#555;line-height:1.65;}
   .learn-count{font-size:.85rem;color:#444;margin-top:10px;line-height:1.6;}
@@ -112,6 +174,26 @@
         <button id="btnBt" class="gold" disabled>連接 micro:bit</button>
       </div>
       <div id="btWarn"></div>
+      <div class="ctrlgrid">
+        <label>偵測引擎
+          <select id="selEngine">
+            <option value="fomo">🎯 我嘅 FOMO 模型</option>
+            <option value="coco">📦 內置 COCO-SSD</option>
+          </select>
+        </label>
+        <label>影像對齊
+          <select id="selFit">
+            <option value="squash">拉伸 Squash</option>
+            <option value="crop">置中裁切 Fit shortest axis</option>
+          </select>
+        </label>
+        <label>信心門檻 <b id="thVal">0.50</b>
+          <input type="range" id="rngTh" min="0.1" max="0.95" step="0.05" value="0.5">
+        </label>
+        <label>框大小 <b id="bsVal">18%</b>
+          <input type="range" id="rngBs" min="6" max="45" step="1" value="18">
+        </label>
+      </div>
     </div>
 
     <div class="card">
@@ -150,11 +232,36 @@
   <details>
     <summary>📋 使用說明 · iPad 設定 · micro:bit 程式</summary>
     <div class="card">
-      <b>電腦（Windows / Mac）：</b>
+      <b>⚠️ 檔案一定要齊，放喺同一個資料夾：</b>
       <ol>
-        <li>用 <b>Chrome</b> 或 <b>Edge</b>。</li>
-        <li>喺檔案資料夾開終端機，行 <code>python -m http.server 8000</code>。</li>
-        <li>開 <code>http://localhost:8000/football-microbit.html</code>。</li>
+        <li><code>football-microbit.html</code></li>
+        <li><code>edge-impulse-standalone.js</code></li>
+        <li><code>edge-impulse-standalone.wasm</code>（約 8 MB，第一次載入要等幾秒）</li>
+        <li><code>server.py</code></li>
+      </ol>
+
+      <b>方法一：GitHub Pages（推薦，有 https，iPad 都用得）</b>
+      <ol>
+        <li>將成個資料夾上載去一個 <b>public</b> repo。</li>
+        <li>Settings → Pages → Source 揀 <code>main</code> / <code>(root)</code> → Save。</li>
+        <li>等 1～2 分鐘，開 <code>https://你嘅帳戶.github.io/repo名稱/</code>。</li>
+        <li>GitHub 會自動用啱 <code>.wasm</code> 嘅 MIME type，唔使 server.py。</li>
+      </ol>
+
+      <b>方法二：本機測試</b>
+      <ol>
+        <li>喺資料夾開終端機，行 <code>python3 server.py</code>
+            —— <b>必須</b>用呢個，唔可以用普通 <code>python -m http.server</code>，因為 <code>.wasm</code> 檔要正確嘅 MIME type 先載入到。</li>
+        <li>開 <code>http://localhost:8082/</code>。</li>
+      </ol>
+
+      <b>我嘅 FOMO 模型（football-tracker）：</b>
+      <ol>
+        <li>輸入 160×160 灰階，標籤 <code>football</code>，屬 constrained object detection（FOMO）。</li>
+        <li><b>影像對齊</b>要同你喺 Edge Impulse 訓練時嘅 Resize mode 一致：訓練揀咗 Squash 就揀「拉伸」，揀咗 Fit shortest axis 就揀「置中裁切」。揀錯會準確度大跌。</li>
+        <li><b>信心門檻</b>調低啲＝易認到但假警報多；調高啲＝準但易漏。由 0.5 開始試。</li>
+        <li><b>框大小</b>：FOMO 只輸出中心點、冇真實尺寸，所以個框係固定大細，用滑桿調到啱你隻波就得。</li>
+        <li>認得唔好嘅話可以切返「內置 COCO-SSD」對比。</li>
       </ol>
 
       <b>iPad：</b>
@@ -195,6 +302,12 @@ const btnCam=document.getElementById('btnCam');
 const btnSwitch=document.getElementById('btnSwitch');
 const btnAxis=document.getElementById('btnAxis');
 const selPerf=document.getElementById('selPerf');
+const selEngine=document.getElementById('selEngine');
+const selFit=document.getElementById('selFit');
+const rngTh=document.getElementById('rngTh');
+const rngBs=document.getElementById('rngBs');
+const thVal=document.getElementById('thVal');
+const bsVal=document.getElementById('bsVal');
 const btnRec=document.getElementById('btnRec');
 const btnDl=document.getElementById('btnDl');
 const btnRecClear=document.getElementById('btnRecClear');
@@ -237,6 +350,13 @@ let lastSeen=0, cycle=0;
 let detFps=0, drawFps=0, detCount=0, drawCount=0, fpsClock=performance.now();
 let knnBall=false, knnConf=0, knnTick=0;
 let lastSent='', lastHeartbeat=0, capturing=false;
+// ---- Edge Impulse FOMO ----
+let ei=null, eiReady=false, eiLabel='football';
+let EI_W=160, EI_H=160, eiFeat=null, eiThreshId=null;
+let engine='fomo', fitMode='squash', eiThresh=0.5, boxScale=0.18;
+const eiCanvas=document.createElement('canvas');
+const eiCtx=eiCanvas.getContext('2d',{willReadFrequently:true});
+
 let shots=[], recTimer=null;             // 訓練相收集
 let showAxis=true;                       // 座標尺顯示開關
 let lastAnalyze=0;                       // 座標分析節流
@@ -266,6 +386,28 @@ if(!navigator.bluetooth){
   btWarn.innerHTML='<div class="warnbox">⚠️ 呢個瀏覽器唔支援 Web Bluetooth，偵測功能照用得，但連唔到 micro:bit。<br>' +
     'iPad／iPhone 請用 App Store 嘅 <b>Bluefy</b> 瀏覽器；電腦請用 <b>Chrome</b> 或 <b>Edge</b>。</div>';
 }
+
+// ===== 載入你自己訓練嘅 FOMO 模型 =====
+(async()=>{
+  try{
+    ei=new EdgeImpulseClassifier();
+    await ei.init();
+    const pr=ei.getProperties(), pj=ei.getProjectInfo();
+    EI_W=pr.image_input_width; EI_H=pr.image_input_height;
+    eiCanvas.width=EI_W; eiCanvas.height=EI_H;
+    eiFeat=new Float32Array(pr.input_features_count);
+    if(pr.labels&&pr.labels.length) eiLabel=pr.labels[0];
+    const th=(pr.thresholds||[]).find(t=>t.type==='object_detection');
+    if(th){ eiThreshId=th.id; }
+    applyEiThreshold(0.5);
+    eiReady=true;
+    log(`FOMO 模型就緒：${pj.owner}/${pj.name} v${pj.deploy_version}`);
+    log(`輸入 ${EI_W}×${EI_H}｜${pr.image_channel_count===1?'灰階':'彩色'}｜標籤「${eiLabel}」`);
+  }catch(e){
+    eiReady=false; engine='coco'; selEngine.value='coco';
+    log('FOMO 未載入（'+e.message+'），改用內置 COCO-SSD');
+  }
+})();
 
 (async()=>{
   try{
@@ -333,6 +475,25 @@ async function applyPreset(key,restartCam){
 }
 selPerf.addEventListener('change',()=>{ autoTuned=true; applyPreset(selPerf.value,true); });
 
+function applyEiThreshold(v){
+  eiThresh=v;
+  if(eiThreshId!==null&&ei){ try{ ei.setThreshold({id:eiThreshId,min_score:Math.max(0.05,v-0.05)}); }catch(e){} }
+}
+selEngine.addEventListener('change',()=>{
+  if(selEngine.value==='fomo'&&!eiReady){
+    log('FOMO 未載入，維持 COCO-SSD'); selEngine.value='coco'; return;
+  }
+  engine=selEngine.value; track=null; smooth=null;
+  log('偵測引擎：'+(engine==='fomo'?'我嘅 FOMO 模型':'內置 COCO-SSD'));
+});
+selFit.addEventListener('change',()=>{ fitMode=selFit.value; log('影像對齊：'+fitMode); });
+rngTh.addEventListener('input',()=>{
+  const v=parseFloat(rngTh.value); thVal.textContent=v.toFixed(2); applyEiThreshold(v);
+});
+rngBs.addEventListener('input',()=>{
+  boxScale=parseInt(rngBs.value)/100; bsVal.textContent=rngBs.value+'%';
+});
+
 btnAxis.addEventListener('click',()=>{
   showAxis=!showAxis;
   btnAxis.textContent = showAxis ? '隱藏座標尺' : '顯示座標尺';
@@ -367,41 +528,66 @@ async function sendToMicrobit(text){
 }
 
 // ===== 偵測迴圈：全畫面掃描 + 局部 ROI 快速追蹤 =====
+// ===== FOMO 偵測：全畫面一次過，唔使 ROI（本身已經好快） =====
+function detectFOMO(){
+  let sx=0, sy=0, sw=overlay.width, sh=overlay.height;
+  if(fitMode==='crop'){                       // 置中裁切最大正方形
+    const side=Math.min(overlay.width,overlay.height);
+    sx=(overlay.width-side)/2; sy=(overlay.height-side)/2; sw=sh=side;
+  }
+  eiCtx.drawImage(video,sx,sy,sw,sh,0,0,EI_W,EI_H);
+  const d=eiCtx.getImageData(0,0,EI_W,EI_H).data;
+  // Edge Impulse 要每個像素打包成一個數字 0xRRGGBB
+  for(let i=0,p=0;i<d.length;i+=4,p++) eiFeat[p]=(d[i]<<16)|(d[i+1]<<8)|d[i+2];
+
+  const hits=ei.classify(eiFeat).filter(o=>o.label===eiLabel&&o.value>=eiThresh);
+  if(!hits.length) return null;
+  const b=hits.reduce((a,c)=>a.value>c.value?a:c);
+
+  // FOMO 回傳嘅係中心格：x,y 係格左上角，加返半格先係中心
+  const cx=sx+(b.x+b.width /2)/EI_W*sw;
+  const cy=sy+(b.y+b.height/2)/EI_H*sh;
+  // FOMO 冇真實尺寸，用固定比例畫框（可用滑桿調）
+  const size=Math.min(overlay.width,overlay.height)*boxScale;
+  return {x:cx-size/2, y:cy-size/2, w:size, h:size, score:b.value};
+}
+
+// ===== COCO-SSD 偵測：ROI 局部追蹤 + 定期全掃描 =====
+async function detectCOCO(){
+  const useROI = smooth && (performance.now()-lastSeen<TRACK_HOLD) && (cycle++ % FULL_EVERY !== 0);
+
+  if(useROI){
+    const pad=1.9;
+    const cx=smooth.x+smooth.w/2+vx*2, cy=smooth.y+smooth.h/2+vy*2;
+    const side=Math.max(smooth.w,smooth.h)*pad;
+    const sx=Math.max(0,Math.min(overlay.width-side,cx-side/2));
+    const sy=Math.max(0,Math.min(overlay.height-side,cy-side/2));
+    const sw=Math.min(side,overlay.width-sx), sh=Math.min(side,overlay.height-sy);
+    roiCtx.drawImage(video,sx,sy,sw,sh,0,0,ROI_SIZE,ROI_SIZE);
+    const p=(await cocoModel.detect(roiCanvas,3)).filter(o=>o.class==='sports ball'&&o.score>0.35);
+    if(p.length){
+      const b=p.reduce((a,c)=>a.score>c.score?a:c);
+      return { x:sx+b.bbox[0]*sw/ROI_SIZE, y:sy+b.bbox[1]*sh/ROI_SIZE,
+               w:b.bbox[2]*sw/ROI_SIZE, h:b.bbox[3]*sh/ROI_SIZE, score:b.score };
+    }
+  }
+
+  infCtx.drawImage(video,0,0,INF_W,INF_H);
+  const TH = knnBall ? 0.28 : 0.45;
+  const p=(await cocoModel.detect(infCanvas,5)).filter(o=>o.class==='sports ball'&&o.score>TH);
+  if(p.length){
+    const b=p.reduce((a,c)=>a.score>c.score?a:c);
+    const kx=overlay.width/INF_W, ky=overlay.height/INF_H;
+    return { x:b.bbox[0]*kx, y:b.bbox[1]*ky, w:b.bbox[2]*kx, h:b.bbox[3]*ky, score:b.score };
+  }
+  return null;
+}
+
 async function detectLoop(){
   while(running){
     if(capturing){ await new Promise(r=>setTimeout(r,30)); continue; }
     try{
-      const useROI = smooth && (performance.now()-lastSeen<TRACK_HOLD) && (cycle++ % FULL_EVERY !== 0);
-      let found=null;
-
-      if(useROI){
-        const pad=1.9;
-        const cx=smooth.x+smooth.w/2+vx*2, cy=smooth.y+smooth.h/2+vy*2;
-        const side=Math.max(smooth.w,smooth.h)*pad;
-        const sx=Math.max(0,Math.min(overlay.width-side,cx-side/2));
-        const sy=Math.max(0,Math.min(overlay.height-side,cy-side/2));
-        const sw=Math.min(side,overlay.width-sx), sh=Math.min(side,overlay.height-sy);
-        roiCtx.drawImage(video,sx,sy,sw,sh,0,0,ROI_SIZE,ROI_SIZE);
-        const p=(await cocoModel.detect(roiCanvas,3)).filter(o=>o.class==='sports ball'&&o.score>0.35);
-        if(p.length){
-          const b=p.reduce((a,c)=>a.score>c.score?a:c);
-          found={ x:sx+b.bbox[0]*sw/ROI_SIZE, y:sy+b.bbox[1]*sh/ROI_SIZE,
-                  w:b.bbox[2]*sw/ROI_SIZE, h:b.bbox[3]*sh/ROI_SIZE, score:b.score };
-        }
-      }
-
-      if(!found){
-        infCtx.drawImage(video,0,0,INF_W,INF_H);
-        // 你教過嘅模型話有波 → 放寬門檻，令佢更容易搵到個框
-        const TH = knnBall ? 0.28 : 0.45;
-        const p=(await cocoModel.detect(infCanvas,5)).filter(o=>o.class==='sports ball'&&o.score>TH);
-        if(p.length){
-          const b=p.reduce((a,c)=>a.score>c.score?a:c);
-          const kx=overlay.width/INF_W, ky=overlay.height/INF_H;
-          found={ x:b.bbox[0]*kx, y:b.bbox[1]*ky, w:b.bbox[2]*kx, h:b.bbox[3]*ky, score:b.score };
-        }
-      }
-
+      const found = (engine==='fomo'&&eiReady) ? detectFOMO() : await detectCOCO();
       if(found){ track=found; lastSeen=performance.now(); }
       detCount++;
     }catch(e){}
@@ -463,7 +649,7 @@ function drawLoop(){
     ctx.strokeStyle='#f2b705'; ctx.lineWidth=4;
     ctx.strokeRect(smooth.x,smooth.y,smooth.w,smooth.h);
 
-    const label=`足球 ${Math.round(smooth.score*100)}%`;
+    const label=`${engine==='fomo'&&eiReady?'⚽':'📦'} 足球 ${Math.round(smooth.score*100)}%`;
     ctx.font='bold 18px "Noto Sans TC",sans-serif';
     const tw=ctx.measureText(label).width;
     ctx.fillStyle='#f2b705';
@@ -486,7 +672,7 @@ function drawLoop(){
     detFps=Math.round(detCount*1000/(now-fpsClock));
     drawFps=Math.round(drawCount*1000/(now-fpsClock));
     detCount=drawCount=0; fpsClock=now;
-    fpsEl.textContent=`偵測 ${detFps} FPS｜畫面 ${drawFps} FPS｜${P.name}`;
+    fpsEl.textContent=`偵測 ${detFps} FPS｜畫面 ${drawFps} FPS｜${engine==='fomo'&&eiReady?'FOMO':'COCO '+P.name}`;
     if(!autoTuned && P!==PRESETS.fast && detFps>0 && detFps<8){
       if(!lowFpsSince) lowFpsSince=now;
       else if(now-lowFpsSince>3000){
