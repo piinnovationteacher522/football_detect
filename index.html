@@ -92,14 +92,14 @@ class EdgeImpulseClassifier {
 
   /* ===== 影片區（含全螢幕） ===== */
   .video-box{position:relative;width:100%;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:4/3;}
-  video,canvas.overlay{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+  /* contain：影片與畫布同樣留邊，兩者永遠完全對齊，轉向亦不會偏移 */
+  video,canvas.overlay{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;}
   canvas.overlay{pointer-events:none;}
 
   .video-box.fs{
     position:fixed; inset:0; width:100vw; height:100vh;
     z-index:9999; border-radius:0; aspect-ratio:auto;
   }
-  .video-box.fs video, .video-box.fs canvas.overlay{ object-fit:contain; }
   .video-box.fs .fs-hud{ display:flex; }
   .fs-hud{
     display:none; position:absolute; left:0; right:0;
@@ -120,8 +120,6 @@ class EdgeImpulseClassifier {
     background:rgba(0,0,0,.55);color:#bfe6c8;font-family:Consolas,monospace;
     font-size:.72rem;padding:4px 8px;border-radius:6px;line-height:1.5;
   }
-  .capture-flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .12s;z-index:4;}
-  .capture-flash.on{opacity:.85;transition:none;}
 
   .statusbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
   .pill{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:#eef1ee;font-size:.86rem;font-weight:600;}
@@ -147,8 +145,7 @@ class EdgeImpulseClassifier {
   .ctrlgrid input[type=range]{width:100%;}
 
   .hint{font-size:.84rem;color:#555;line-height:1.65;}
-  .learn-count{font-size:.85rem;color:#444;margin-top:10px;line-height:1.6;}
-  .log{margin-top:10px;background:#10160f;color:#bfe6c8;border-radius:8px;padding:10px;height:130px;overflow-y:auto;
+  .log{margin-top:10px;background:#10160f;color:#bfe6c8;border-radius:8px;padding:10px;height:340px;overflow-y:auto;
        font-family:Consolas,monospace;font-size:.76rem;line-height:1.5;white-space:pre-wrap;-webkit-overflow-scrolling:touch;}
   .warnbox{background:#fff4e5;border-left:5px solid var(--accent);padding:10px 12px;border-radius:8px;font-size:.85rem;line-height:1.65;margin-top:10px;}
   details{margin-top:16px;}
@@ -175,7 +172,6 @@ class EdgeImpulseClassifier {
         <video id="video" autoplay muted playsinline webkit-playsinline></video>
         <canvas id="overlay" class="overlay"></canvas>
         <div class="fps" id="fps">FPS —</div>
-        <div class="capture-flash" id="flash"></div>
         <div class="fs-close" id="fsClose">✕ 離開全螢幕</div>
         <div class="fs-hud" id="fsHud"></div>
       </div>
@@ -234,19 +230,8 @@ class EdgeImpulseClassifier {
     </div>
 
     <div class="card">
-      <h2>🎞 收集訓練相片</h2>
-      <p class="hint">
-        自動每 0.8 秒拍攝一張。在實際場地走一圈，以不同角度、距離、光線拍攝 200 至 300 張，
-        然後下載並上傳至 Edge Impulse 進行標註，用以改善模型。
-      </p>
-      <div class="btnrow">
-        <button id="btnRec" disabled>▶ 開始收集</button>
-        <button id="btnDl" class="gold" disabled>⬇ 下載全部</button>
-        <button id="btnRecClear" class="warn" disabled>清除</button>
-      </div>
-      <div class="learn-count" id="recCount">已收集：0 張</div>
-
-      <h2 style="margin-top:16px">訊號記錄</h2>
+      <h2>訊號記錄</h2>
+      <p class="hint">顯示模型載入、鏡頭、藍牙連接及每次傳送給 micro:bit 的內容。</p>
       <div class="log" id="log"></div>
     </div>
   </div>
@@ -321,7 +306,6 @@ const overlay=document.getElementById('overlay');
 const ctx=overlay.getContext('2d');
 const logEl=document.getElementById('log');
 const fpsEl=document.getElementById('fps');
-const flashEl=document.getElementById('flash');
 const statusbar=document.getElementById('statusbar');
 const fsHud=document.getElementById('fsHud');
 const fsClose=document.getElementById('fsClose');
@@ -350,11 +334,6 @@ const bsVal=document.getElementById('bsVal');
 const lblExpand=document.getElementById('lblExpand');
 const lblFixed=document.getElementById('lblFixed');
 
-const btnRec=document.getElementById('btnRec');
-const btnDl=document.getElementById('btnDl');
-const btnRecClear=document.getElementById('btnRecClear');
-const recCount=document.getElementById('recCount');
-
 // ===== 設定 =====
 const COORD_MAX=100;
 const LEFT_EDGE=40, RIGHT_EDGE=60;
@@ -380,7 +359,6 @@ let detFps=0, drawFps=0, detCount=0, drawCount=0, fpsClock=performance.now();
 let showAxis=true, lastAnalyze=0;
 let pos={x:0,y:0,side:'',valid:false};
 let lastSent='', lastHeartbeat=0;
-let shots=[], recTimer=null, capturing=false;
 let isFs=false;
 
 const UART_SERVICE='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
@@ -445,8 +423,32 @@ async function startCamera(){
   video.setAttribute('playsinline','');
   await video.play();
   await new Promise(r=>{ if(video.videoWidth) r(); else video.onloadedmetadata=r; });
-  overlay.width=video.videoWidth; overlay.height=video.videoHeight;
+  syncOverlay(true);
 }
+
+// ===== 同步畫布尺寸（修復手機轉向後框位偏移） =====
+// 手機由直向轉橫向時，鏡頭串流的長闊會對調（例如 480×640 變 640×480）。
+// 若畫布仍維持舊尺寸，繪圖座標系統就會與影片不符，導致框的位置偏移。
+function syncOverlay(force){
+  if(!video.videoWidth||!video.videoHeight) return false;
+  if(!force && overlay.width===video.videoWidth && overlay.height===video.videoHeight) return false;
+  overlay.width=video.videoWidth;
+  overlay.height=video.videoHeight;
+  // 讓外框比例跟隨串流，畫面不會被裁走
+  videoBox.style.aspectRatio=(video.videoWidth/video.videoHeight).toFixed(5);
+  // 尺寸改變後舊的追蹤資料已不適用，重設避免框飛到錯誤位置
+  track=null; smooth=null; vx=vy=0; pos.valid=false;
+  log(`畫面尺寸：${video.videoWidth}×${video.videoHeight}`);
+  return true;
+}
+
+// 串流尺寸一改變就立即同步
+video.addEventListener('resize',()=>syncOverlay());
+video.addEventListener('loadedmetadata',()=>syncOverlay());
+// 部分瀏覽器不會觸發 video resize，改用轉向與視窗事件補上
+window.addEventListener('orientationchange',()=>{ setTimeout(()=>syncOverlay(),300); setTimeout(()=>syncOverlay(),800); });
+window.addEventListener('resize',()=>syncOverlay());
+if(screen.orientation) screen.orientation.addEventListener('change',()=>setTimeout(()=>syncOverlay(),300));
 
 btnCam.addEventListener('click',async()=>{
   if(!eiReady){ log('模型尚未就緒，請稍候再試'); return; }
@@ -454,7 +456,7 @@ btnCam.addEventListener('click',async()=>{
     await startCamera();
     running=true;
     btnCam.disabled=true;
-    btnFs.disabled=btnSwitch.disabled=btnRec.disabled=false;
+    btnFs.disabled=btnSwitch.disabled=false;
     btnBt.disabled=!navigator.bluetooth;
     log(`鏡頭已開啟 ${video.videoWidth}×${video.videoHeight}`);
     detectLoop(); drawLoop();
@@ -476,6 +478,7 @@ function enterFs(){
   if(videoBox.requestFullscreen) videoBox.requestFullscreen().catch(()=>{});
   else if(videoBox.webkitRequestFullscreen) videoBox.webkitRequestFullscreen();
   if(screen.orientation&&screen.orientation.lock) screen.orientation.lock('landscape').catch(()=>{});
+  setTimeout(()=>syncOverlay(true),300);
 }
 function exitFs(){
   isFs=false;
@@ -485,6 +488,7 @@ function exitFs(){
   if(document.fullscreenElement&&document.exitFullscreen) document.exitFullscreen().catch(()=>{});
   else if(document.webkitFullscreenElement&&document.webkitExitFullscreen) document.webkitExitFullscreen();
   if(screen.orientation&&screen.orientation.unlock) try{ screen.orientation.unlock(); }catch(e){}
+  setTimeout(()=>syncOverlay(true),300);
 }
 btnFs.addEventListener('click',()=>{ isFs?exitFs():enterFs(); });
 fsClose.addEventListener('click',exitFs);
@@ -554,7 +558,6 @@ function detectFOMO(){
 
 async function detectLoop(){
   while(running){
-    if(capturing){ await new Promise(r=>setTimeout(r,30)); continue; }
     try{
       const found=detectFOMO();
       if(found){ track=found; lastSeen=performance.now(); }
@@ -567,6 +570,8 @@ async function detectLoop(){
 // ===== 繪圖 =====
 function drawLoop(){
   if(!running) return;
+  // 每幀檢查一次，任何情況下畫布都與串流尺寸一致（成本極低）
+  syncOverlay();
   const now=performance.now();
   ctx.clearRect(0,0,overlay.width,overlay.height);
 
@@ -708,50 +713,6 @@ rngTh.addEventListener('input',()=>{ const v=parseFloat(rngTh.value); thVal.text
 rngEx.addEventListener('input',()=>{ expand=parseFloat(rngEx.value); exVal.textContent=expand.toFixed(1)+'×'; });
 rngBs.addEventListener('input',()=>{ fixedScale=parseInt(rngBs.value)/100; bsVal.textContent=rngBs.value+'%'; });
 
-// ===== 收集訓練相片 =====
-const shotCanvas=document.createElement('canvas');
-const shotCtx=shotCanvas.getContext('2d');
-
-function grabShot(){
-  shotCanvas.width=video.videoWidth; shotCanvas.height=video.videoHeight;
-  shotCtx.drawImage(video,0,0);
-  shots.push(shotCanvas.toDataURL('image/jpeg',0.85));
-  recCount.textContent=`已收集：${shots.length} 張`;
-  btnDl.disabled=btnRecClear.disabled=false;
-  flashEl.classList.add('on');
-  setTimeout(()=>flashEl.classList.remove('on'),50);
-}
-
-btnRec.addEventListener('click',()=>{
-  if(recTimer){
-    clearInterval(recTimer); recTimer=null;
-    btnRec.textContent='▶ 開始收集';
-    log(`已停止收集，共 ${shots.length} 張`);
-  }else{
-    recTimer=setInterval(grabShot,800);
-    btnRec.textContent='⏸ 停止收集';
-    log('開始收集訓練相片（每 0.8 秒一張）');
-  }
-});
-
-btnDl.addEventListener('click',async()=>{
-  log(`開始下載 ${shots.length} 張。若瀏覽器詢問「允許多個下載」，請按允許。`);
-  const stamp=new Date().toISOString().slice(0,10);
-  for(let i=0;i<shots.length;i++){
-    const a=document.createElement('a');
-    a.href=shots[i];
-    a.download=`ball_${stamp}_${String(i+1).padStart(4,'0')}.jpg`;
-    document.body.appendChild(a); a.click(); a.remove();
-    await new Promise(r=>setTimeout(r,250));
-  }
-  log('下載完成');
-});
-
-btnRecClear.addEventListener('click',()=>{
-  shots=[]; recCount.textContent='已收集：0 張';
-  btnDl.disabled=btnRecClear.disabled=true;
-  log('已清除訓練相片');
-});
 </script>
 </body>
 </html>
