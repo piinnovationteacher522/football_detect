@@ -48,7 +48,7 @@
   .statusbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
   .pill{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:#eef1ee;font-size:.86rem;font-weight:600;}
   .dot{width:10px;height:10px;border-radius:50%;background:#999;flex:none;}
-  .pill.on .dot{background:var(--ok);} .pill.off .dot{background:var(--off);}
+  .pill.on .dot{background:var(--ok);} .pill.off .dot{background:var(--off);} .pill.mid .dot{background:#e0a80f;}
 
   button{
     font:inherit;font-weight:600;border:none;border-radius:10px;
@@ -104,6 +104,11 @@
         <button id="btnCam">開啟鏡頭</button>
         <button id="btnSwitch" class="secondary" disabled>切換鏡頭</button>
         <button id="btnAxis" class="secondary">隱藏座標尺</button>
+        <select id="selPerf" title="效能模式">
+          <option value="fast">⚡ 極速</option>
+          <option value="balanced" selected>⚖️ 平衡</option>
+          <option value="quality">🔍 高清</option>
+        </select>
         <button id="btnBt" class="gold" disabled>連接 micro:bit</button>
       </div>
       <div id="btWarn"></div>
@@ -177,6 +182,7 @@ const pillBt=document.getElementById('pillBt');
 const btnCam=document.getElementById('btnCam');
 const btnSwitch=document.getElementById('btnSwitch');
 const btnAxis=document.getElementById('btnAxis');
+const selPerf=document.getElementById('selPerf');
 const btnBt=document.getElementById('btnBt');
 const btnShotBall=document.getElementById('btnShotBall');
 const btnShotNone=document.getElementById('btnShotNone');
@@ -187,9 +193,14 @@ const btWarn=document.getElementById('btWarn');
 
 const COORD_MAX=100;             // 座標範圍：X、Y 各 0～100（畫面百分比）
 const LEFT_EDGE=40, RIGHT_EDGE=60; // 左／中／右判斷界線
-const INF_W=320, INF_H=240;      // 全畫面推論解析度（細啲＝快啲）
-const ROI_SIZE=224;              // 局部追蹤推論解析度
-const FULL_EVERY=6;              // 每 6 個週期做一次全畫面掃描
+const PRESETS={
+  fast:     {infW:256,infH:192,roi:160,full:9, camW:640, camH:480, name:'極速'},
+  balanced: {infW:320,infH:240,roi:224,full:6, camW:960, camH:720, name:'平衡'},
+  quality:  {infW:416,infH:312,roi:288,full:4, camW:1280,camH:960, name:'高清'}
+};
+let P=PRESETS.balanced;
+let INF_W=P.infW, INF_H=P.infH, ROI_SIZE=P.roi, FULL_EVERY=P.full;
+let autoTuned=false, lowFpsSince=0;
 const TRACK_HOLD=1100;           // 【追蹤框】短暫遮擋／認唔到時，框仍然跟住個波
 const ANALYZE_MS=100;            // 【座標分析】每 100ms 分析一次格仔位置
 const SMOOTH=0.45;               // 畫框平滑度
@@ -218,6 +229,13 @@ const UART_SERVICE='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 const UART_RX='6e400002-b5a3-f393-e0a9-e50e24dcca9e';
 let btDevice=null, rxChar=null;
 
+// setTimeout 最少有 4ms 延遲；MessageChannel 幾乎 0ms，偵測迴圈快好多
+const yieldNow=(()=>{
+  const ch=new MessageChannel(); let q=[];
+  ch.port1.onmessage=()=>{ const c=q; q=[]; c.forEach(f=>f()); };
+  return ()=>new Promise(r=>{ q.push(r); ch.port2.postMessage(0); });
+})();
+
 function log(m){
   const t=new Date().toLocaleTimeString('zh-HK',{hour12:false});
   logEl.textContent+=`[${t}] ${m}\n`; logEl.scrollTop=logEl.scrollHeight;
@@ -234,12 +252,21 @@ if(!navigator.bluetooth){
 
 (async()=>{
   try{
-    await tf.setBackend('webgl'); await tf.ready();
+    await tf.setBackend('webgl');
+    tf.env().set('WEBGL_FORCE_F16_TEXTURES',true);   // 半精度：iPad／手機快好多
+    tf.env().set('WEBGL_PACK',true);
+    tf.env().set('WEBGL_FLUSH_THRESHOLD',1);
+    await tf.ready();
     cocoModel=await cocoSsd.load({base:'lite_mobilenet_v2'});  // 最快嗰個版本
     mobilenetModel=await mobilenet.load({version:2,alpha:0.5}); // 細模型，拍照學習夠用
     knn=knnClassifier.create();
+    // 預熱：先跑一次空推論，令第一幀唔會特別慢
+    const warm=document.createElement('canvas'); warm.width=INF_W; warm.height=INF_H;
+    warm.getContext('2d').fillRect(0,0,INF_W,INF_H);
+    await cocoModel.detect(warm,1);
+    mobilenetModel.infer(warm,true).dispose();
     setPill(pillModel,true,`模型：就緒 ✔ (${tf.getBackend()})`,'');
-    log('模型載入完成，後端：'+tf.getBackend());
+    log('模型載入完成並已預熱，後端：'+tf.getBackend());
   }catch(e){
     setPill(pillModel,false,'','模型：載入失敗');
     log('模型載入失敗：'+e.message);
@@ -249,7 +276,7 @@ if(!navigator.bluetooth){
 async function startCamera(){
   if(stream) stream.getTracks().forEach(t=>t.stop());
   stream=await navigator.mediaDevices.getUserMedia({
-    video:{facingMode:{ideal:facing},width:{ideal:1280},height:{ideal:960},frameRate:{ideal:30}},
+    video:{facingMode:{ideal:facing},width:{ideal:P.camW},height:{ideal:P.camH},frameRate:{ideal:30}},
     audio:false
   });
   video.srcObject=stream;
@@ -276,6 +303,17 @@ btnSwitch.addEventListener('click',async()=>{
   try{ await startCamera(); log('已切換鏡頭：'+(facing==='user'?'前鏡':'後鏡')); }
   catch(e){ log('切換失敗：'+e.message); }
 });
+
+async function applyPreset(key,restartCam){
+  P=PRESETS[key];
+  INF_W=P.infW; INF_H=P.infH; ROI_SIZE=P.roi; FULL_EVERY=P.full;
+  infCanvas.width=INF_W; infCanvas.height=INF_H;
+  roiCanvas.width=ROI_SIZE; roiCanvas.height=ROI_SIZE;
+  selPerf.value=key;
+  if(restartCam && running){ try{ await startCamera(); }catch(e){} }
+  log('效能模式：'+P.name+`（推論 ${INF_W}×${INF_H}）`);
+}
+selPerf.addEventListener('change',()=>{ autoTuned=true; applyPreset(selPerf.value,true); });
 
 btnAxis.addEventListener('click',()=>{
   showAxis=!showAxis;
@@ -336,7 +374,9 @@ async function detectLoop(){
 
       if(!found){
         infCtx.drawImage(video,0,0,INF_W,INF_H);
-        const p=(await cocoModel.detect(infCanvas,5)).filter(o=>o.class==='sports ball'&&o.score>0.45);
+        // 你教過嘅模型話有波 → 放寬門檻，令佢更容易搵到個框
+        const TH = knnBall ? 0.28 : 0.45;
+        const p=(await cocoModel.detect(infCanvas,5)).filter(o=>o.class==='sports ball'&&o.score>TH);
         if(p.length){
           const b=p.reduce((a,c)=>a.score>c.score?a:c);
           const kx=overlay.width/INF_W, ky=overlay.height/INF_H;
@@ -347,7 +387,7 @@ async function detectLoop(){
       if(found){ track=found; lastSeen=performance.now(); }
       detCount++;
     }catch(e){}
-    await new Promise(r=>setTimeout(r,0)); // 讓畫面有機會更新
+    await yieldNow(); // 幾乎零延遲咁交還控制權，畫面照更新
   }
 }
 
@@ -428,7 +468,14 @@ function drawLoop(){
     detFps=Math.round(detCount*1000/(now-fpsClock));
     drawFps=Math.round(drawCount*1000/(now-fpsClock));
     detCount=drawCount=0; fpsClock=now;
-    fpsEl.textContent=`偵測 ${detFps} FPS｜畫面 ${drawFps} FPS`;
+    fpsEl.textContent=`偵測 ${detFps} FPS｜畫面 ${drawFps} FPS｜${P.name}`;
+    if(!autoTuned && P!==PRESETS.fast && detFps>0 && detFps<8){
+      if(!lowFpsSince) lowFpsSince=now;
+      else if(now-lowFpsSince>3000){
+        autoTuned=true; applyPreset('fast',true);
+        log('偵測 FPS 偏低，已自動轉做「極速」模式');
+      }
+    }else lowFpsSince=0;
   }
   requestAnimationFrame(drawLoop);
 }
@@ -447,8 +494,18 @@ function analyzePosition(){
     pos.valid=false;
   }
 
-  const visible = !!smooth || knnBall;
-  setPill(pillBall,visible,'足球：見到 ⚽（追蹤中）','足球：未見到');
+  // 三態：有框追蹤中 / 認到但定位唔到（只有拍照學習模型認到，佢無位置資訊）/ 見唔到
+  pillBall.classList.remove('on','off','mid');
+  if(smooth){
+    pillBall.classList.add('on');
+    pillBall.innerHTML='<span class="dot"></span>足球：追蹤中 ⚽';
+  }else if(knnBall){
+    pillBall.classList.add('mid');
+    pillBall.innerHTML='<span class="dot"></span>足球：認到，但定位唔到';
+  }else{
+    pillBall.classList.add('off');
+    pillBall.innerHTML='<span class="dot"></span>足球：未見到';
+  }
   setPill(pillPos,pos.valid, pos.valid?`座標：X ${pos.x}，Y ${pos.y}（${pos.side}邊）`:'', '座標：—');
 
   const msg = pos.valid ? `BALL,${pos.x},${pos.y}` : (knnBall ? 'BALL,-1,-1' : 'NONE');
