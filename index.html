@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>足球偵測 × micro:bit</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.6/dist/knn-classifier.min.js"></script>
+<style>
+  :root{
+    --pitch:#1f6b3a;
+    --pitch-dark:#144927;
+    --line:#eef3e9;
+    --ink:#152018;
+    --card:#ffffff;
+    --accent:#f2b705;
+    --ok:#2e9e5b;
+    --off:#b23a3a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{
+    font-family:"Segoe UI","Noto Sans TC","PingFang TC",sans-serif;
+    background:
+      repeating-linear-gradient(90deg,var(--pitch) 0 120px,var(--pitch-dark) 120px 240px);
+    min-height:100vh;
+    color:var(--ink);
+    padding:24px 16px 48px;
+  }
+  .wrap{max-width:980px;margin:0 auto;}
+  header{
+    color:var(--line);
+    text-align:center;
+    margin-bottom:20px;
+  }
+  header h1{
+    font-size:clamp(1.5rem,4vw,2.2rem);
+    letter-spacing:.05em;
+  }
+  header p{opacity:.85;margin-top:6px;font-size:.95rem;}
+
+  .grid{
+    display:grid;
+    grid-template-columns:minmax(0,1.6fr) minmax(260px,1fr);
+    gap:16px;
+  }
+  @media (max-width:820px){ .grid{grid-template-columns:1fr;} }
+
+  .card{
+    background:var(--card);
+    border-radius:14px;
+    padding:16px;
+    box-shadow:0 6px 24px rgba(0,0,0,.25);
+  }
+  .card h2{
+    font-size:1.02rem;
+    margin-bottom:10px;
+    border-left:5px solid var(--accent);
+    padding-left:8px;
+  }
+
+  .video-box{position:relative;width:100%;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:4/3;}
+  video,canvas.overlay{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+  canvas.overlay{pointer-events:none;}
+
+  .statusbar{
+    display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;
+  }
+  .pill{
+    display:inline-flex;align-items:center;gap:6px;
+    padding:6px 12px;border-radius:999px;
+    background:#eef1ee;font-size:.88rem;font-weight:600;
+  }
+  .dot{width:10px;height:10px;border-radius:50%;background:#999;}
+  .pill.on .dot{background:var(--ok);}
+  .pill.off .dot{background:var(--off);}
+
+  button{
+    font:inherit;font-weight:600;
+    border:none;border-radius:10px;
+    padding:10px 14px;cursor:pointer;
+    background:var(--pitch);color:#fff;
+    transition:transform .05s ease, filter .15s ease;
+  }
+  button:hover{filter:brightness(1.1);}
+  button:active{transform:scale(.97);}
+  button:disabled{background:#9aa79e;cursor:not-allowed;}
+  button.secondary{background:#39424a;}
+  button.warn{background:var(--off);}
+  button.gold{background:var(--accent);color:#3a2c00;}
+  .btnrow{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
+
+  .learn-count{
+    font-size:.85rem;color:#444;margin-top:8px;line-height:1.6;
+  }
+  .learn-result{
+    margin-top:8px;padding:8px 10px;border-radius:8px;
+    background:#f4f6f3;font-size:.9rem;min-height:38px;
+  }
+  .log{
+    margin-top:10px;background:#10160f;color:#bfe6c8;
+    border-radius:8px;padding:10px;height:120px;overflow-y:auto;
+    font-family:Consolas,monospace;font-size:.78rem;line-height:1.5;
+    white-space:pre-wrap;
+  }
+  details{margin-top:16px;}
+  details summary{cursor:pointer;font-weight:700;color:var(--line);}
+  details .card{margin-top:10px;font-size:.9rem;line-height:1.7;}
+  code{background:#eef1ee;padding:1px 5px;border-radius:4px;font-size:.85em;}
+  ol{padding-left:1.3em;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>⚽ 足球偵測 × micro:bit 藍牙</h1>
+    <p>用鏡頭認出足球，畫框框住佢，再經藍牙話俾 micro:bit 知</p>
+  </header>
+
+  <div class="grid">
+    <!-- 左邊：鏡頭 -->
+    <div class="card">
+      <h2>鏡頭畫面</h2>
+      <div class="video-box">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="overlay" class="overlay"></canvas>
+      </div>
+      <div class="statusbar">
+        <span class="pill" id="pillModel"><span class="dot"></span>模型：載入中…</span>
+        <span class="pill off" id="pillBall"><span class="dot"></span>足球：未見到</span>
+        <span class="pill off" id="pillPos"><span class="dot"></span>位置：—</span>
+        <span class="pill off" id="pillBt"><span class="dot"></span>micro:bit：未連接</span>
+      </div>
+      <div class="btnrow">
+        <button id="btnCam">開啟鏡頭</button>
+        <button id="btnBt" class="gold" disabled>連接 micro:bit</button>
+      </div>
+    </div>
+
+    <!-- 右邊：學習 -->
+    <div class="card">
+      <h2>教 AI 認你嘅足球（選用）</h2>
+      <p style="font-size:.85rem;color:#555;line-height:1.6">
+        除咗內置模型，你仲可以即場「教」佢：影幾張<b>有足球</b>同<b>無足球</b>嘅畫面，
+        佢就會學識分辨你隻波。
+      </p>
+      <div class="btnrow">
+        <button id="btnLearnBall" disabled>📸 加入「有足球」樣本</button>
+        <button id="btnLearnNone" class="secondary" disabled>📸 加入「無足球」樣本</button>
+        <button id="btnLearnReset" class="warn" disabled>清除學習</button>
+      </div>
+      <div class="learn-count" id="learnCount">樣本：有足球 0 張／無足球 0 張</div>
+      <div class="learn-result" id="learnResult">未開始學習。每類最少影 10 張效果較好。</div>
+
+      <h2 style="margin-top:16px">訊號記錄</h2>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+
+  <details>
+    <summary>📋 使用說明 &amp; micro:bit 設定</summary>
+    <div class="card">
+      <b>網頁點樣開：</b>
+      <ol>
+        <li>要用 <b>Chrome / Edge</b>（Web Bluetooth 只支援呢啲瀏覽器）。</li>
+        <li>鏡頭同藍牙都要 <b>https://</b> 或者 <b>localhost</b> 先用得。最簡單：喺檔案所在資料夾開終端機，行 <code>python -m http.server 8000</code>，然後開 <code>http://localhost:8000/football-microbit.html</code>。</li>
+      </ol>
+      <b>micro:bit 要準備：</b>
+      <ol>
+        <li>去 MakeCode，新增擴展（Extensions）→ 搜尋 <code>bluetooth</code> 加入。</li>
+        <li>喺「當開機時 on start」放入 <code>bluetooth uart service（藍牙 UART 服務）</code>。</li>
+        <li>齒輪 ⚙ → Project Settings → 揀 <b>No Pairing Required</b>（JustWorks）。</li>
+        <li>用「當 UART 收到資料（以換行分隔）」讀字串：收到 <code>BALL</code> 顯示 ⚽ 圖案，收到 <code>NONE</code> 就清空螢幕。</li>
+      </ol>
+      <b>網頁會傳送嘅訊號：</b>見到足球 → <code>BALL,x,y</code>（例如 <code>BALL,3,2</code> 即係 X 第 3 格、Y 第 2 格；X 由左至右 1~5，Y 由上至下 1~4）；足球消失 → <code>NONE</code>。每次位置改變傳一次，另外每 2 秒重覆一次現況。<br>
+      <b>MakeCode 拆解座標：</b>用「文字 Text」類別入面嘅 <code>split（分割字串）</code>積木，以 <code>,</code> 分割收到嘅字串，第 0 項係 <code>BALL</code>，第 1 項係 X，第 2 項係 Y，再用 <code>parse to number</code> 轉做數字。想判斷左右：X ≤ 2 係左邊，X ≥ 4 係右邊，X = 3 係中間。
+    </div>
+  </details>
+</div>
+
+<script>
+// ===== 元件 =====
+const video   = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const ctx     = overlay.getContext('2d');
+const logEl   = document.getElementById('log');
+
+const pillModel = document.getElementById('pillModel');
+const pillBall  = document.getElementById('pillBall');
+const pillPos   = document.getElementById('pillPos');
+const pillBt    = document.getElementById('pillBt');
+
+// ===== XY 格網設定 =====
+const GRID_COLS = 5;   // X：1（最左）至 5（最右）
+const GRID_ROWS = 4;   // Y：1（最頂）至 4（最底）
+
+const btnCam   = document.getElementById('btnCam');
+const btnBt    = document.getElementById('btnBt');
+const btnLearnBall  = document.getElementById('btnLearnBall');
+const btnLearnNone  = document.getElementById('btnLearnNone');
+const btnLearnReset = document.getElementById('btnLearnReset');
+const learnCount  = document.getElementById('learnCount');
+const learnResult = document.getElementById('learnResult');
+
+// ===== 狀態 =====
+let cocoModel = null;      // COCO-SSD：畫框用
+let mobilenetModel = null; // MobileNet：抽特徵
+let knn = null;            // KNN：即場學習
+let running = false;
+let ballVisible = false;
+let lastSent = '';
+let lastHeartbeat = 0;
+
+// ===== BLE (micro:bit UART) =====
+const UART_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const UART_RX      = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+let btDevice = null, rxChar = null;
+
+function log(msg){
+  const t = new Date().toLocaleTimeString('zh-HK',{hour12:false});
+  logEl.textContent += `[${t}] ${msg}\n`;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function setPill(el, on, textOn, textOff){
+  el.classList.toggle('on', on);
+  el.classList.toggle('off', !on);
+  el.innerHTML = `<span class="dot"></span>${on ? textOn : textOff}`;
+}
+
+// ===== 載入模型 =====
+(async () => {
+  try{
+    cocoModel = await cocoSsd.load();
+    mobilenetModel = await mobilenet.load();
+    knn = knnClassifier.create();
+    setPill(pillModel, true, '模型：已就緒 ✔', '');
+    log('AI 模型載入完成');
+  }catch(e){
+    setPill(pillModel, false, '', '模型：載入失敗');
+    log('模型載入失敗：' + e.message);
+  }
+})();
+
+// ===== 鏡頭 =====
+btnCam.addEventListener('click', async () => {
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:'environment', width:{ideal:640}, height:{ideal:480}}, audio:false
+    });
+    video.srcObject = stream;
+    await video.play();
+    overlay.width = video.videoWidth;
+    overlay.height = video.videoHeight;
+    running = true;
+    btnCam.disabled = true;
+    btnBt.disabled = false;
+    btnLearnBall.disabled = btnLearnNone.disabled = btnLearnReset.disabled = false;
+    log('鏡頭已開啟');
+    detectLoop();
+  }catch(e){
+    log('開唔到鏡頭：' + e.message + '（記得要 https 或 localhost，同埋俾權限）');
+  }
+});
+
+// ===== 藍牙連接 =====
+btnBt.addEventListener('click', async () => {
+  if(btDevice && btDevice.gatt.connected){
+    btDevice.gatt.disconnect();
+    return;
+  }
+  try{
+    btDevice = await navigator.bluetooth.requestDevice({
+      filters:[{namePrefix:'BBC micro:bit'}],
+      optionalServices:[UART_SERVICE]
+    });
+    btDevice.addEventListener('gattserverdisconnected', () => {
+      rxChar = null;
+      setPill(pillBt, false, '', 'micro:bit：未連接');
+      btnBt.textContent = '連接 micro:bit';
+      log('micro:bit 已斷線');
+    });
+    const server  = await btDevice.gatt.connect();
+    const service = await server.getPrimaryService(UART_SERVICE);
+    rxChar = await service.getCharacteristic(UART_RX);
+    setPill(pillBt, true, 'micro:bit：已連接 ✔', '');
+    btnBt.textContent = '斷開 micro:bit';
+    log('已連接 ' + btDevice.name);
+    lastSent = ''; // 連接後重新傳送現況
+  }catch(e){
+    log('藍牙連接失敗：' + e.message);
+  }
+});
+
+async function sendToMicrobit(text){
+  if(!rxChar) return;
+  try{
+    await rxChar.writeValue(new TextEncoder().encode(text + '\n'));
+    log('已傳送 → ' + text);
+  }catch(e){
+    log('傳送失敗：' + e.message);
+  }
+}
+
+// ===== 偵測主迴圈 =====
+async function detectLoop(){
+  if(!running) return;
+
+  let boxes = [];
+
+  // 1) COCO-SSD 內置偵測（sports ball）
+  try{
+    const preds = await cocoModel.detect(video);
+    boxes = preds.filter(p => p.class === 'sports ball' && p.score > 0.5);
+  }catch(e){ /* 略過單幀錯誤 */ }
+
+  // 2) 即場學習（KNN）——兩類都有樣本先啟用
+  let knnSaysBall = false, knnText = '';
+  const counts = knn.getClassExampleCount();
+  if((counts['ball']||0) > 0 && (counts['none']||0) > 0){
+    try{
+      const logits = mobilenetModel.infer(video, true);
+      const result = await knn.predictClass(logits, 5);
+      logits.dispose();
+      const conf = Math.round(result.confidences[result.label]*100);
+      knnSaysBall = (result.label === 'ball' && conf >= 70);
+      knnText = `你教嘅模型判斷：${result.label==='ball'?'⚽ 有足球':'✖ 無足球'}（信心 ${conf}%）`;
+      learnResult.textContent = knnText;
+    }catch(e){}
+  }
+
+  // 3) 畫底層：半透明 XY 格網
+  ctx.clearRect(0,0,overlay.width,overlay.height);
+  const cw = overlay.width  / GRID_COLS;   // 每格闊度
+  const ch = overlay.height / GRID_ROWS;   // 每格高度
+  drawGrid(cw, ch);
+
+  // 4) 計算個波喺邊一格（用最高信心嗰個框嘅中心點）
+  let gx = 0, gy = 0, side = '';
+  const best = boxes.length ? boxes.reduce((a,b)=>a.score>b.score?a:b) : null;
+  if(best){
+    const [bx,by,bw,bh] = best.bbox;
+    const cx = bx + bw/2, cy = by + bh/2;                    // 波嘅中心點
+    gx = Math.min(GRID_COLS, Math.max(1, Math.ceil(cx/cw))); // X：1~GRID_COLS
+    gy = Math.min(GRID_ROWS, Math.max(1, Math.ceil(cy/ch))); // Y：1~GRID_ROWS
+    side = gx <= Math.floor(GRID_COLS/2) ? '左' : (gx > Math.ceil(GRID_COLS/2) ? '右' : '中');
+
+    // 高亮個波所在嗰格
+    ctx.fillStyle = 'rgba(242,183,5,0.28)';
+    ctx.fillRect((gx-1)*cw, (gy-1)*ch, cw, ch);
+    ctx.strokeStyle = 'rgba(242,183,5,0.95)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect((gx-1)*cw, (gy-1)*ch, cw, ch);
+
+    // 中心點十字準星
+    ctx.strokeStyle = '#ff4b4b';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx-14, cy); ctx.lineTo(cx+14, cy);
+    ctx.moveTo(cx, cy-14); ctx.lineTo(cx, cy+14);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, 5, 0, Math.PI*2);
+    ctx.fillStyle = '#ff4b4b';
+    ctx.fill();
+  }
+
+  // 5) 畫足球框 + 標籤（連 XY 座標）
+  for(const b of boxes){
+    const [x,y,w,h] = b.bbox;
+    ctx.strokeStyle = '#f2b705';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(x,y,w,h);
+    const label = (b===best)
+      ? `足球 ${Math.round(b.score*100)}%  X${gx},Y${gy}（${side}）`
+      : `足球 ${Math.round(b.score*100)}%`;
+    ctx.font = 'bold 18px "Noto Sans TC",sans-serif';
+    const tw = ctx.measureText(label).width;
+    ctx.fillStyle = '#f2b705';
+    ctx.fillRect(x, Math.max(0,y-26), tw+14, 26);
+    ctx.fillStyle = '#3a2c00';
+    ctx.fillText(label, x+7, Math.max(18,y-7));
+  }
+
+  // 6) 綜合判斷（內置偵測 或 你教嘅模型 任一認出即算見到）
+  ballVisible = boxes.length > 0 || knnSaysBall;
+  setPill(pillBall, ballVisible, '足球：見到 ⚽', '足球：未見到');
+  setPill(pillPos, !!best,
+    best ? `位置：X${gx}，Y${gy}（${side}邊）` : '',
+    '位置：—');
+
+  // 7) 傳送藍牙訊號：狀態或格仔位置改變即傳；另外每 2 秒重覆現況
+  //    格式：BALL,x,y（例如 BALL,3,2）；睇唔到就 NONE
+  const now = Date.now();
+  const msg = best ? `BALL,${gx},${gy}` : (ballVisible ? 'BALL,0,0' : 'NONE');
+  if(msg !== lastSent || now - lastHeartbeat > 2000){
+    lastSent = msg;
+    lastHeartbeat = now;
+    sendToMicrobit(msg);
+  }
+
+  requestAnimationFrame(detectLoop);
+}
+
+// ===== 畫半透明格網 =====
+function drawGrid(cw, ch){
+  ctx.save();
+  // 格線
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 1;
+  for(let i=1;i<GRID_COLS;i++){
+    ctx.beginPath();
+    ctx.moveTo(i*cw, 0); ctx.lineTo(i*cw, overlay.height);
+    ctx.stroke();
+  }
+  for(let j=1;j<GRID_ROWS;j++){
+    ctx.beginPath();
+    ctx.moveTo(0, j*ch); ctx.lineTo(overlay.width, j*ch);
+    ctx.stroke();
+  }
+  // 每格左上角座標標籤（半透明）
+  ctx.font = 'bold 13px "Noto Sans TC",sans-serif';
+  for(let j=0;j<GRID_ROWS;j++){
+    for(let i=0;i<GRID_COLS;i++){
+      const label = `${i+1},${j+1}`;
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(i*cw+3, j*ch+3, ctx.measureText(label).width+10, 19);
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.fillText(label, i*cw+8, j*ch+17);
+    }
+  }
+  ctx.restore();
+}
+
+// ===== 學習按鈕 =====
+function addExample(label){
+  const logits = mobilenetModel.infer(video, true);
+  knn.addExample(logits, label);
+  logits.dispose();
+  const c = knn.getClassExampleCount();
+  learnCount.textContent = `樣本：有足球 ${c['ball']||0} 張／無足球 ${c['none']||0} 張`;
+}
+btnLearnBall.addEventListener('click', () => addExample('ball'));
+btnLearnNone.addEventListener('click', () => addExample('none'));
+btnLearnReset.addEventListener('click', () => {
+  knn.clearAllClasses();
+  learnCount.textContent = '樣本：有足球 0 張／無足球 0 張';
+  learnResult.textContent = '已清除。每類最少影 10 張效果較好。';
+});
+</script>
+</body>
+</html>
