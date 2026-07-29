@@ -103,6 +103,7 @@
       <div class="btnrow">
         <button id="btnCam">開啟鏡頭</button>
         <button id="btnSwitch" class="secondary" disabled>切換鏡頭</button>
+        <button id="btnGrid" class="secondary">隱藏格網</button>
         <button id="btnBt" class="gold" disabled>連接 micro:bit</button>
       </div>
       <div id="btWarn"></div>
@@ -174,6 +175,7 @@ const pillPos=document.getElementById('pillPos');
 const pillBt=document.getElementById('pillBt');
 const btnCam=document.getElementById('btnCam');
 const btnSwitch=document.getElementById('btnSwitch');
+const btnGrid=document.getElementById('btnGrid');
 const btnBt=document.getElementById('btnBt');
 const btnShotBall=document.getElementById('btnShotBall');
 const btnShotNone=document.getElementById('btnShotNone');
@@ -186,7 +188,8 @@ const GRID_COLS=5, GRID_ROWS=4;
 const INF_W=320, INF_H=240;      // 全畫面推論解析度（細啲＝快啲）
 const ROI_SIZE=224;              // 局部追蹤推論解析度
 const FULL_EVERY=6;              // 每 6 個週期做一次全畫面掃描
-const HOLD_MS=350;               // 短暫遮擋時保持追蹤
+const TRACK_HOLD=1100;           // 【追蹤框】短暫遮擋／認唔到時，框仍然跟住個波
+const ANALYZE_MS=100;            // 【座標分析】每 100ms 分析一次格仔位置
 const SMOOTH=0.45;               // 畫框平滑度
 
 const infCanvas=document.createElement('canvas');
@@ -205,6 +208,9 @@ let lastSeen=0, cycle=0;
 let detFps=0, drawFps=0, detCount=0, drawCount=0, fpsClock=performance.now();
 let knnBall=false, knnConf=0, knnTick=0;
 let lastSent='', lastHeartbeat=0, capturing=false;
+let showGrid=true;                       // 格網顯示開關
+let lastAnalyze=0;                       // 座標分析節流
+let pos={gx:0,gy:0,side:'',valid:false};  // 座標分析結果（同追蹤框分開）
 
 const UART_SERVICE='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 const UART_RX='6e400002-b5a3-f393-e0a9-e50e24dcca9e';
@@ -269,6 +275,11 @@ btnSwitch.addEventListener('click',async()=>{
   catch(e){ log('切換失敗：'+e.message); }
 });
 
+btnGrid.addEventListener('click',()=>{
+  showGrid=!showGrid;
+  btnGrid.textContent = showGrid ? '隱藏格網' : '顯示格網';
+});
+
 btnBt.addEventListener('click',async()=>{
   if(btDevice&&btDevice.gatt.connected){ btDevice.gatt.disconnect(); return; }
   try{
@@ -302,7 +313,7 @@ async function detectLoop(){
   while(running){
     if(capturing){ await new Promise(r=>setTimeout(r,30)); continue; }
     try{
-      const useROI = smooth && (performance.now()-lastSeen<HOLD_MS) && (cycle++ % FULL_EVERY !== 0);
+      const useROI = smooth && (performance.now()-lastSeen<TRACK_HOLD) && (cycle++ % FULL_EVERY !== 0);
       let found=null;
 
       if(useROI){
@@ -357,15 +368,14 @@ async function knnLoop(){
   }
 }
 
-// ===== 繪圖迴圈：每幀 rAF，平滑跟蹤 =====
+// ===== 繪圖迴圈：每幀 rAF =====
 function drawLoop(){
   if(!running) return;
   const now=performance.now();
-  const cw=overlay.width/GRID_COLS, ch=overlay.height/GRID_ROWS;
   ctx.clearRect(0,0,overlay.width,overlay.height);
-  drawGrid(cw,ch);
 
-  const alive = track && (now-lastSeen<HOLD_MS);
+  // ---------- 【A】追蹤框：只要見到足球就持續跟住畫，同座標分析無關 ----------
+  const alive = track && (now-lastSeen<TRACK_HOLD);
   if(alive){
     if(!smooth) smooth={...track};
     else{
@@ -377,22 +387,32 @@ function drawLoop(){
     }
   }else{ smooth=null; vx=vy=0; }
 
-  let gx=0,gy=0,side='';
+  // ---------- 【B】座標分析：獨立運作，節流至每 ANALYZE_MS 一次 ----------
+  if(now-lastAnalyze>=ANALYZE_MS){
+    lastAnalyze=now;
+    analyzePosition();
+  }
+
+  // ---------- 畫底層格網（可開關，屬於座標分析嘅視覺部分） ----------
+  const cw=overlay.width/GRID_COLS, ch=overlay.height/GRID_ROWS;
+  if(showGrid){
+    drawGrid(cw,ch);
+    if(pos.valid){
+      ctx.fillStyle='rgba(242,183,5,0.28)';
+      ctx.fillRect((pos.gx-1)*cw,(pos.gy-1)*ch,cw,ch);
+      ctx.strokeStyle='rgba(242,183,5,0.95)'; ctx.lineWidth=3;
+      ctx.strokeRect((pos.gx-1)*cw,(pos.gy-1)*ch,cw,ch);
+    }
+  }
+
+  // ---------- 畫追蹤框本身（標籤只顯示信心度，唔混入座標） ----------
   if(smooth){
     const cx=smooth.x+smooth.w/2, cy=smooth.y+smooth.h/2;
-    gx=Math.min(GRID_COLS,Math.max(1,Math.ceil(cx/cw)));
-    gy=Math.min(GRID_ROWS,Math.max(1,Math.ceil(cy/ch)));
-    side = gx<=Math.floor(GRID_COLS/2)?'左':(gx>Math.ceil(GRID_COLS/2)?'右':'中');
-
-    ctx.fillStyle='rgba(242,183,5,0.28)';
-    ctx.fillRect((gx-1)*cw,(gy-1)*ch,cw,ch);
-    ctx.strokeStyle='rgba(242,183,5,0.95)'; ctx.lineWidth=3;
-    ctx.strokeRect((gx-1)*cw,(gy-1)*ch,cw,ch);
 
     ctx.strokeStyle='#f2b705'; ctx.lineWidth=4;
     ctx.strokeRect(smooth.x,smooth.y,smooth.w,smooth.h);
 
-    const label=`足球 ${Math.round(smooth.score*100)}%  X${gx},Y${gy}（${side}）`;
+    const label=`足球 ${Math.round(smooth.score*100)}%`;
     ctx.font='bold 18px "Noto Sans TC",sans-serif';
     const tw=ctx.measureText(label).width;
     ctx.fillStyle='#f2b705';
@@ -410,15 +430,6 @@ function drawLoop(){
 
   if(capturing) drawCaptureGuide();
 
-  const visible = !!smooth || knnBall;
-  setPill(pillBall,visible,'足球：見到 ⚽','足球：未見到');
-  setPill(pillPos,!!smooth, smooth?`位置：X${gx}，Y${gy}（${side}邊）`:'', '位置：—');
-
-  const msg = smooth ? `BALL,${gx},${gy}` : (knnBall ? 'BALL,0,0' : 'NONE');
-  if(msg!==lastSent || now-lastHeartbeat>2000){
-    lastSent=msg; lastHeartbeat=now; sendToMicrobit(msg);
-  }
-
   drawCount++;
   if(now-fpsClock>500){
     detFps=Math.round(detCount*1000/(now-fpsClock));
@@ -427,6 +438,31 @@ function drawLoop(){
     fpsEl.textContent=`偵測 ${detFps} FPS｜畫面 ${drawFps} FPS`;
   }
   requestAnimationFrame(drawLoop);
+}
+
+// ===== 座標分析：獨立模組，讀追蹤框位置 → 算格仔 → 更新狀態 → 傳藍牙 =====
+function analyzePosition(){
+  const now=performance.now();
+  const cw=overlay.width/GRID_COLS, ch=overlay.height/GRID_ROWS;
+
+  if(smooth){
+    const cx=smooth.x+smooth.w/2, cy=smooth.y+smooth.h/2;
+    pos.gx=Math.min(GRID_COLS,Math.max(1,Math.ceil(cx/cw)));
+    pos.gy=Math.min(GRID_ROWS,Math.max(1,Math.ceil(cy/ch)));
+    pos.side = pos.gx<=Math.floor(GRID_COLS/2)?'左':(pos.gx>Math.ceil(GRID_COLS/2)?'右':'中');
+    pos.valid=true;
+  }else{
+    pos.valid=false;
+  }
+
+  const visible = !!smooth || knnBall;
+  setPill(pillBall,visible,'足球：見到 ⚽（追蹤中）','足球：未見到');
+  setPill(pillPos,pos.valid, pos.valid?`位置：X${pos.gx}，Y${pos.gy}（${pos.side}邊）`:'', '位置：—');
+
+  const msg = pos.valid ? `BALL,${pos.gx},${pos.gy}` : (knnBall ? 'BALL,0,0' : 'NONE');
+  if(msg!==lastSent || now-lastHeartbeat>2000){
+    lastSent=msg; lastHeartbeat=now; sendToMicrobit(msg);
+  }
 }
 
 function drawGrid(cw,ch){
