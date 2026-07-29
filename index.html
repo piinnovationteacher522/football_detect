@@ -130,6 +130,18 @@
       <div class="learn-count" id="learnCount">樣本：足球 0 張／背景 0 張</div>
       <div class="learn-result" id="learnResult">未開始學習。兩類各拍 2～3 次就用得。</div>
 
+      <h2 style="margin-top:16px">🎞 收集訓練相（俾 Edge Impulse 用）</h2>
+      <p class="hint">
+        自動每 0.8 秒影一張。喺實際場地行一圈，唔同角度、距離、光線影 200～300 張，
+        然後下載去 Edge Impulse 標註。
+      </p>
+      <div class="btnrow">
+        <button id="btnRec" disabled>▶ 開始收集</button>
+        <button id="btnDl" class="gold" disabled>⬇ 下載全部</button>
+        <button id="btnRecClear" class="warn" disabled>清除</button>
+      </div>
+      <div class="learn-count" id="recCount">已收集：0 張</div>
+
       <h2 style="margin-top:16px">訊號記錄</h2>
       <div class="log" id="log"></div>
     </div>
@@ -183,6 +195,10 @@ const btnCam=document.getElementById('btnCam');
 const btnSwitch=document.getElementById('btnSwitch');
 const btnAxis=document.getElementById('btnAxis');
 const selPerf=document.getElementById('selPerf');
+const btnRec=document.getElementById('btnRec');
+const btnDl=document.getElementById('btnDl');
+const btnRecClear=document.getElementById('btnRecClear');
+const recCount=document.getElementById('recCount');
 const btnBt=document.getElementById('btnBt');
 const btnShotBall=document.getElementById('btnShotBall');
 const btnShotNone=document.getElementById('btnShotNone');
@@ -221,6 +237,7 @@ let lastSeen=0, cycle=0;
 let detFps=0, drawFps=0, detCount=0, drawCount=0, fpsClock=performance.now();
 let knnBall=false, knnConf=0, knnTick=0;
 let lastSent='', lastHeartbeat=0, capturing=false;
+let shots=[], recTimer=null;             // 訓練相收集
 let showAxis=true;                       // 座標尺顯示開關
 let lastAnalyze=0;                       // 座標分析節流
 let pos={x:0,y:0,side:'',valid:false};    // 座標分析結果（同追蹤框分開）
@@ -293,6 +310,7 @@ btnCam.addEventListener('click',async()=>{
     btnCam.disabled=true; btnSwitch.disabled=false;
     btnBt.disabled=!navigator.bluetooth;
     btnShotBall.disabled=btnShotNone.disabled=btnLearnReset.disabled=false;
+    btnRec.disabled=false;
     log(`鏡頭已開啟 ${video.videoWidth}×${video.videoHeight}`);
     detectLoop(); drawLoop(); knnLoop();
   }catch(e){ log('開唔到鏡頭：'+e.message); }
@@ -608,6 +626,51 @@ async function burstCapture(label,shots=12){
   capturing=false;
   btnShotBall.disabled=btnShotNone.disabled=false;
 }
+
+// ===== 收集訓練相：存落記憶體，之後一次過下載 =====
+const shotCanvas=document.createElement('canvas');
+const shotCtx=shotCanvas.getContext('2d');
+
+function grabShot(){
+  shotCanvas.width=video.videoWidth; shotCanvas.height=video.videoHeight;
+  shotCtx.drawImage(video,0,0);
+  shots.push(shotCanvas.toDataURL('image/jpeg',0.85));
+  recCount.textContent=`已收集：${shots.length} 張`;
+  btnDl.disabled=btnRecClear.disabled=false;
+  flashEl.classList.add('on');
+  setTimeout(()=>flashEl.classList.remove('on'),50);
+}
+
+btnRec.addEventListener('click',()=>{
+  if(recTimer){
+    clearInterval(recTimer); recTimer=null;
+    btnRec.textContent='▶ 開始收集';
+    log(`已停止收集，共 ${shots.length} 張`);
+  }else{
+    recTimer=setInterval(grabShot,800);
+    btnRec.textContent='⏸ 停止收集';
+    log('開始收集訓練相（每 0.8 秒一張）');
+  }
+});
+
+btnDl.addEventListener('click',async()=>{
+  log(`開始下載 ${shots.length} 張…瀏覽器問「允許多個下載」請撳允許`);
+  const stamp=new Date().toISOString().slice(0,10);
+  for(let i=0;i<shots.length;i++){
+    const a=document.createElement('a');
+    a.href=shots[i];
+    a.download=`ball_${stamp}_${String(i+1).padStart(4,'0')}.jpg`;
+    document.body.appendChild(a); a.click(); a.remove();
+    await new Promise(r=>setTimeout(r,250));
+  }
+  log('下載完成');
+});
+
+btnRecClear.addEventListener('click',()=>{
+  shots=[]; recCount.textContent='已收集：0 張';
+  btnDl.disabled=btnRecClear.disabled=true;
+  log('已清除訓練相');
+});
 
 btnShotBall.addEventListener('click',()=>burstCapture('ball'));
 btnShotNone.addEventListener('click',()=>burstCapture('none'));
